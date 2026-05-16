@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "scripts": {
     "dev": "echo Web app scaffold pending",
-    "test": "echo Web app tests pending"
+    "test": "echo Web app tests pending",
+    "test:e2e": "echo Web app e2e tests pending"
   }
 }
