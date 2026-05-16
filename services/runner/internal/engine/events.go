@@ -22,17 +22,19 @@ func NewEventRecorder() *EventRecorder {
 }
 
 func (r *EventRecorder) Record(eventType string, workspaceID string, payload map[string]any) SessionEvent {
+	storedPayload := copyPayload(payload)
 	event := SessionEvent{
 		Type:        eventType,
 		WorkspaceID: workspaceID,
 		CreatedAt:   time.Now().UTC(),
-		Payload:     payload,
+		Payload:     storedPayload,
 	}
 
 	r.mu.Lock()
 	r.events = append(r.events, event)
 	r.mu.Unlock()
 
+	event.Payload = copyPayload(storedPayload)
 	return event
 }
 
@@ -41,6 +43,26 @@ func (r *EventRecorder) Events() []SessionEvent {
 	defer r.mu.Unlock()
 
 	events := make([]SessionEvent, len(r.events))
-	copy(events, r.events)
+	for i, event := range r.events {
+		events[i] = SessionEvent{
+			Type:        event.Type,
+			WorkspaceID: event.WorkspaceID,
+			CreatedAt:   event.CreatedAt,
+			Payload:     copyPayload(event.Payload),
+		}
+	}
 	return events
+}
+
+func copyPayload(payload map[string]any) map[string]any {
+	if payload == nil {
+		return nil
+	}
+
+	cloned := make(map[string]any, len(payload))
+	for key, value := range payload {
+		cloned[key] = value
+	}
+
+	return cloned
 }

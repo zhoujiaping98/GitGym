@@ -2,10 +2,15 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
 	"time"
 )
+
+const defaultCommandTimeout = 30 * time.Second
 
 type CommandResult struct {
 	Stdout     string
@@ -49,7 +54,11 @@ func RunCommandWithEvents(workspacePath string, raw string, workspaceID string, 
 }
 
 func runCommand(workspacePath string, parts []string) (CommandResult, error) {
-	cmd := exec.Command(parts[0], parts[1:]...)
+	timeout := commandTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
 	cmd.Dir = workspacePath
 
 	var stdout bytes.Buffer
@@ -60,6 +69,10 @@ func runCommand(workspacePath string, parts []string) (CommandResult, error) {
 	start := time.Now()
 	err := cmd.Run()
 	duration := int(time.Since(start).Milliseconds())
+
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return CommandResult{}, fmt.Errorf("command timed out after %s", timeout)
+	}
 
 	exitCode := 0
 	if err != nil {
@@ -78,12 +91,25 @@ func runCommand(workspacePath string, parts []string) (CommandResult, error) {
 	}, nil
 }
 
+func commandTimeout() time.Duration {
+	raw := os.Getenv("GITGYM_RUNNER_COMMAND_TIMEOUT")
+	if raw == "" {
+		return defaultCommandTimeout
+	}
+
+	timeout, err := time.ParseDuration(raw)
+	if err != nil || timeout <= 0 {
+		return defaultCommandTimeout
+	}
+
+	return timeout
+}
+
 func parseCommand(raw string) ([]string, error) {
 	var (
 		parts    []string
 		current  []rune
 		inQuote  rune
-		escaping bool
 		sawToken bool
 	)
 
@@ -97,14 +123,11 @@ func parseCommand(raw string) ([]string, error) {
 
 	for _, r := range raw {
 		switch {
-		case escaping:
-			current = append(current, r)
-			sawToken = true
-			escaping = false
-		case r == '\\':
-			escaping = true
 		case inQuote != 0:
-			if r == inQuote {
+			if r == '\\' {
+				current = append(current, r)
+				sawToken = true
+			} else if r == inQuote {
 				inQuote = 0
 			} else {
 				current = append(current, r)
@@ -121,10 +144,6 @@ func parseCommand(raw string) ([]string, error) {
 		}
 	}
 
-	if escaping {
-		current = append(current, '\\')
-		sawToken = true
-	}
 	if inQuote != 0 {
 		return nil, errors.New("unterminated quoted command argument")
 	}
