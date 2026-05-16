@@ -11,6 +11,6 @@ import (
 func NewRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/healthz", handlers.Health())
-	r.With(middleware.RequireSession).Get("/api/v1/auth/me", handlers.AuthMe())
+	r.With(middleware.RequireSessionCookie).Get("/api/v1/auth/me", handlers.AuthMe())
 	return r
 }
