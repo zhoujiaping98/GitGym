@@ -50,6 +50,23 @@ export default function App() {
   const currentSession = useCurrentSession();
   const terminalSession = useTerminalSession(currentSession.session);
   const hasActiveSession = currentSession.status === "ready" && currentSession.session;
+  const topBarActions = hasActiveSession
+    ? [
+        {
+          label: "Refresh session",
+          onClick: () => {
+            void currentSession.refresh();
+          },
+        },
+        {
+          label: "Reconnect terminal",
+          onClick: () => {
+            terminalSession.reconnect();
+          },
+          disabled: terminalSession.status === "connecting",
+        },
+      ]
+    : [];
   const sessionTone =
     currentSession.status === "loading"
       ? "pending"
@@ -70,6 +87,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <TopBar
+        actions={topBarActions}
         metaLabel={templateLabel(currentSession.session?.templateId ?? null)}
         sessionLabel={sessionLabel}
         tone={sessionTone}

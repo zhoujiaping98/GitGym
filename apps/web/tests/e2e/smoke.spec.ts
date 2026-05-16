@@ -49,6 +49,12 @@ test.describe("GitGym shell", () => {
     await expect(page.getByText("Session live")).toBeVisible();
     await expect(page.getByText("Repository")).toBeVisible();
     await expect(page.getByText("History")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Refresh session" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Reconnect terminal" }),
+    ).toBeVisible();
   });
 
   test("shows a retryable session error state when lookup fails", async ({

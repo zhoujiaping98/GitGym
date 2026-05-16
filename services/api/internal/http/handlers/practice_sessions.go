@@ -72,6 +72,30 @@ func CreatePracticeSession(practiceService service.PracticeService) http.Handler
 	}
 }
 
+func GetCurrentPracticeSession(practiceService service.PracticeService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authenticatedSession, ok := middleware.AuthenticatedSessionFromContext(r.Context())
+		if !ok || authenticatedSession.UserID == 0 {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": "authenticated session missing from request context",
+			})
+			return
+		}
+
+		session, err := practiceService.CurrentPracticeSession(r.Context(), authenticatedSession.UserID)
+		if err != nil {
+			writeJSON(w, statusForPracticeSessionLookupError(err), map[string]any{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session": newPracticeSessionResponse(session),
+		})
+	}
+}
+
 func newPracticeSessionResponse(session domain.PracticeSession) practiceSessionResponse {
 	return practiceSessionResponse{
 		ID:             session.ID,
@@ -96,6 +120,19 @@ func statusForCreatePracticeSessionError(err error) int {
 		return http.StatusInternalServerError
 	case errors.Is(err, service.ErrRunnerWorkspaceCreation):
 		return http.StatusBadGateway
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func statusForPracticeSessionLookupError(err error) int {
+	switch {
+	case errors.Is(err, service.ErrInvalidPracticeSessionInput):
+		return http.StatusBadRequest
+	case errors.Is(err, service.ErrPracticeSessionNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, service.ErrPracticeServiceConfiguration):
+		return http.StatusInternalServerError
 	default:
 		return http.StatusInternalServerError
 	}

@@ -29,8 +29,9 @@ func NewRouter(deps ...Dependencies) http.Handler {
 			r.Use(middleware.RequireSessionCookie)
 			r.Get("/auth/me", handlers.AuthMe())
 			r.Get("/templates", handlers.ListPracticeTemplates(dependencies.PracticeService))
+			r.Get("/practice-sessions/current", handlers.GetCurrentPracticeSession(dependencies.PracticeService))
 			r.Post("/practice-sessions", handlers.CreatePracticeSession(dependencies.PracticeService))
-			r.Get("/practice-sessions/{sessionId}/terminal", handlers.PracticeTerminalWebsocket())
+			r.Get("/practice-sessions/{sessionId}/terminal", handlers.PracticeTerminalWebsocket(dependencies.PracticeService))
 		})
 	})
 	return r

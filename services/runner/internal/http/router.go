@@ -11,7 +11,7 @@ func NewRouter(workRoot string) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/healthz", handlers.Health())
 	r.Post("/internal/workspaces", handlers.CreateWorkspace(workRoot))
-	r.Post("/internal/workspaces/{workspaceID}/commands", handlers.RunCommand())
-	r.Post("/internal/workspaces/{workspaceID}/reset", handlers.ResetWorkspace())
+	r.Post("/internal/workspaces/{workspaceID}/commands", handlers.RunCommand(workRoot))
+	r.Post("/internal/workspaces/{workspaceID}/reset", handlers.ResetWorkspace(workRoot))
 	return r
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,7 +14,9 @@ import (
 
 	"gitgym/services/api/internal/domain"
 	httpx "gitgym/services/api/internal/http"
+	"gitgym/services/api/internal/runner"
 	"gitgym/services/api/internal/service"
+	"github.com/coder/websocket"
 )
 
 func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
@@ -32,8 +35,9 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 			status int
 		}{
 			{name: "list templates", method: http.MethodGet, target: "/api/v1/templates", status: http.StatusOK},
+			{name: "current session", method: http.MethodGet, target: "/api/v1/practice-sessions/current", status: http.StatusNotFound},
 			{name: "create session", method: http.MethodPost, target: "/api/v1/practice-sessions", body: []byte(`{"scenario_id":7,"template_id":1}`), status: http.StatusCreated},
-			{name: "terminal placeholder", method: http.MethodGet, target: "/api/v1/practice-sessions/123/terminal", status: http.StatusNotImplemented},
+			{name: "terminal route", method: http.MethodGet, target: "/api/v1/practice-sessions/123/terminal", status: http.StatusNotFound},
 		}
 
 		for _, tc := range cases {
@@ -57,6 +61,17 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 	t.Run("create session remains protected without cookie", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":7,"template_id":1}`))
 		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rec.Code)
+		}
+	})
+
+	t.Run("current session remains protected without cookie", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/current", nil)
 		rec := httptest.NewRecorder()
 
 		router.ServeHTTP(rec, req)
@@ -162,6 +177,135 @@ func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testi
 	}
 }
 
+func TestCurrentPracticeSessionReturnsStoredSession(t *testing.T) {
+	t.Parallel()
+
+	practiceService := service.NewPracticeService(
+		service.NewInMemoryPracticeSessionStore(),
+		&stubRunnerClient{
+			workspace: runner.Workspace{
+				ID:       "ws-current",
+				Path:     "/tmp/ws-current",
+				Template: "standard",
+			},
+		},
+		func() time.Time {
+			return time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+		},
+	)
+
+	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     1,
+		ScenarioID: 7,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	router := httpx.NewRouter(httpx.Dependencies{
+		PracticeService: practiceService,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/current", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Session struct {
+			ID        uint64 `json:"id"`
+			RunnerRef string `json:"runner_ref"`
+			Status    string `json:"status"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal current session payload: %v", err)
+	}
+	if payload.Session.ID != session.ID {
+		t.Fatalf("expected session ID %d, got %d", session.ID, payload.Session.ID)
+	}
+	if payload.Session.RunnerRef != "ws-current" {
+		t.Fatalf("expected runner ref ws-current, got %q", payload.Session.RunnerRef)
+	}
+	if payload.Session.Status != "active" {
+		t.Fatalf("expected active status, got %q", payload.Session.Status)
+	}
+}
+
+func TestPracticeTerminalWebsocketSeedsAndEchoesSession(t *testing.T) {
+	t.Parallel()
+
+	practiceService := service.NewPracticeService(
+		service.NewInMemoryPracticeSessionStore(),
+		&stubRunnerClient{
+			workspace: runner.Workspace{
+				ID:       "ws-terminal",
+				Path:     "/tmp/ws-terminal",
+				Template: "standard",
+			},
+		},
+		func() time.Time {
+			return time.Date(2026, 5, 16, 13, 0, 0, 0, time.UTC)
+		},
+	)
+
+	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     1,
+		ScenarioID: 11,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	server := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
+		PracticeService: practiceService,
+	}))
+	defer server.Close()
+
+	wsURL := fmt.Sprintf(
+		"ws%s/api/v1/practice-sessions/%d/terminal",
+		strings.TrimPrefix(server.URL, "http"),
+		session.ID,
+	)
+	header := http.Header{}
+	header.Add("Cookie", "gitgym_session=session-token")
+
+	conn, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{
+		HTTPHeader: header,
+	})
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	_, seedLine, err := conn.Read(context.Background())
+	if err != nil {
+		t.Fatalf("read seed line: %v", err)
+	}
+	if !strings.Contains(string(seedLine), session.RunnerRef) {
+		t.Fatalf("expected seed line to mention runner ref %q, got %q", session.RunnerRef, string(seedLine))
+	}
+
+	if err := conn.Write(context.Background(), websocket.MessageText, []byte("git status --short")); err != nil {
+		t.Fatalf("write websocket payload: %v", err)
+	}
+
+	_, echoedLine, err := conn.Read(context.Background())
+	if err != nil {
+		t.Fatalf("read echoed line: %v", err)
+	}
+	if string(echoedLine) != "git status --short" {
+		t.Fatalf("expected echoed line %q, got %q", "git status --short", string(echoedLine))
+	}
+}
+
 func TestCreatePracticeSessionMapsErrors(t *testing.T) {
 	t.Parallel()
 
@@ -202,8 +346,10 @@ func TestCreatePracticeSessionMapsErrors(t *testing.T) {
 }
 
 type stubPracticeService struct {
-	createPracticeSessionFunc func(context.Context, service.CreatePracticeSessionInput) (domain.PracticeSession, error)
-	lastCreateInput           service.CreatePracticeSessionInput
+	createPracticeSessionFunc  func(context.Context, service.CreatePracticeSessionInput) (domain.PracticeSession, error)
+	currentPracticeSessionFunc func(context.Context, uint64) (domain.PracticeSession, error)
+	practiceSessionByIDFunc    func(context.Context, uint64, uint64) (domain.PracticeSession, error)
+	lastCreateInput            service.CreatePracticeSessionInput
 }
 
 func (s *stubPracticeService) ListTemplates(context.Context) []service.PracticeTemplate {
@@ -216,4 +362,18 @@ func (s *stubPracticeService) CreatePracticeSession(ctx context.Context, input s
 		return s.createPracticeSessionFunc(ctx, input)
 	}
 	return domain.PracticeSession{ID: 1, Status: "active"}, nil
+}
+
+func (s *stubPracticeService) CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error) {
+	if s.currentPracticeSessionFunc != nil {
+		return s.currentPracticeSessionFunc(ctx, userID)
+	}
+	return domain.PracticeSession{}, service.ErrPracticeSessionNotFound
+}
+
+func (s *stubPracticeService) PracticeSessionByID(ctx context.Context, userID uint64, sessionID uint64) (domain.PracticeSession, error) {
+	if s.practiceSessionByIDFunc != nil {
+		return s.practiceSessionByIDFunc(ctx, userID, sessionID)
+	}
+	return domain.PracticeSession{}, service.ErrPracticeSessionNotFound
 }

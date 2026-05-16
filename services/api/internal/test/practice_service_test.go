@@ -148,6 +148,70 @@ func TestPracticeServiceClassifiesCreateSessionErrors(t *testing.T) {
 	})
 }
 
+func TestPracticeServiceReturnsCurrentSessionForUser(t *testing.T) {
+	t.Parallel()
+
+	store := service.NewInMemoryPracticeSessionStore()
+	svc := service.NewPracticeService(store, &stubRunnerClient{
+		workspace: runner.Workspace{
+			ID:       "ws-current",
+			Path:     "/tmp/ws-current",
+			Template: "standard",
+		},
+	}, time.Now)
+
+	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 7,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	current, err := svc.CurrentPracticeSession(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("current practice session: %v", err)
+	}
+	if current.ID != created.ID {
+		t.Fatalf("expected current session ID %d, got %d", created.ID, current.ID)
+	}
+}
+
+func TestPracticeServiceFindsSessionByIDForOwningUser(t *testing.T) {
+	t.Parallel()
+
+	store := service.NewInMemoryPracticeSessionStore()
+	svc := service.NewPracticeService(store, &stubRunnerClient{
+		workspace: runner.Workspace{
+			ID:       "ws-terminal",
+			Path:     "/tmp/ws-terminal",
+			Template: "standard",
+		},
+	}, time.Now)
+
+	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 7,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	session, err := svc.PracticeSessionByID(context.Background(), 42, created.ID)
+	if err != nil {
+		t.Fatalf("practice session by ID: %v", err)
+	}
+	if session.ID != created.ID {
+		t.Fatalf("expected session ID %d, got %d", created.ID, session.ID)
+	}
+
+	if _, err := svc.PracticeSessionByID(context.Background(), 99, created.ID); !errors.Is(err, service.ErrPracticeSessionNotFound) {
+		t.Fatalf("expected not found for non-owning user, got %v", err)
+	}
+}
+
 type stubPracticeSessionStore struct {
 	createCalls  int
 	lastSession  domain.PracticeSession
@@ -160,6 +224,20 @@ func (s *stubPracticeSessionStore) CreatePracticeSession(_ context.Context, sess
 	session.ID = 101
 	s.savedSession = session
 	return session, nil
+}
+
+func (s *stubPracticeSessionStore) CurrentPracticeSession(_ context.Context, userID uint64) (domain.PracticeSession, error) {
+	if s.savedSession.ID == 0 || s.savedSession.UserID != userID {
+		return domain.PracticeSession{}, service.ErrPracticeSessionNotFound
+	}
+	return s.savedSession, nil
+}
+
+func (s *stubPracticeSessionStore) PracticeSessionByID(_ context.Context, sessionID uint64) (domain.PracticeSession, error) {
+	if s.savedSession.ID == sessionID {
+		return s.savedSession, nil
+	}
+	return domain.PracticeSession{}, service.ErrPracticeSessionNotFound
 }
 
 type stubRunnerClient struct {

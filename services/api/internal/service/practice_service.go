@@ -18,6 +18,7 @@ var (
 	ErrUnknownPracticeTemplate      = errors.New("unknown practice template")
 	ErrPracticeServiceConfiguration = errors.New("practice service configuration error")
 	ErrRunnerWorkspaceCreation      = errors.New("runner workspace creation failed")
+	ErrPracticeSessionNotFound      = errors.New("practice session not found")
 )
 
 type PracticeTemplate struct {
@@ -34,11 +35,15 @@ type CreatePracticeSessionInput struct {
 
 type PracticeSessionStore interface {
 	CreatePracticeSession(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error)
+	CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error)
+	PracticeSessionByID(ctx context.Context, sessionID uint64) (domain.PracticeSession, error)
 }
 
 type PracticeService interface {
 	ListTemplates(ctx context.Context) []PracticeTemplate
 	CreatePracticeSession(ctx context.Context, input CreatePracticeSessionInput) (domain.PracticeSession, error)
+	CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error)
+	PracticeSessionByID(ctx context.Context, userID uint64, sessionID uint64) (domain.PracticeSession, error)
 }
 
 type practiceService struct {
@@ -114,6 +119,42 @@ func (s *practiceService) CreatePracticeSession(ctx context.Context, input Creat
 	return created, nil
 }
 
+func (s *practiceService) CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error) {
+	if userID == 0 {
+		return domain.PracticeSession{}, fmt.Errorf("%w", ErrInvalidPracticeSessionInput)
+	}
+	if s.store == nil {
+		return domain.PracticeSession{}, fmt.Errorf("%w: practice session store is not configured", ErrPracticeServiceConfiguration)
+	}
+
+	session, err := s.store.CurrentPracticeSession(ctx, userID)
+	if err != nil {
+		return domain.PracticeSession{}, err
+	}
+	if session.UserID != userID {
+		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionNotFound)
+	}
+	return session, nil
+}
+
+func (s *practiceService) PracticeSessionByID(ctx context.Context, userID uint64, sessionID uint64) (domain.PracticeSession, error) {
+	if userID == 0 || sessionID == 0 {
+		return domain.PracticeSession{}, fmt.Errorf("%w", ErrInvalidPracticeSessionInput)
+	}
+	if s.store == nil {
+		return domain.PracticeSession{}, fmt.Errorf("%w: practice session store is not configured", ErrPracticeServiceConfiguration)
+	}
+
+	session, err := s.store.PracticeSessionByID(ctx, sessionID)
+	if err != nil {
+		return domain.PracticeSession{}, err
+	}
+	if session.UserID != userID {
+		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionNotFound)
+	}
+	return session, nil
+}
+
 func (s *practiceService) templateByID(templateID uint64) (PracticeTemplate, bool) {
 	for _, template := range s.templates {
 		if template.ID == templateID {
@@ -124,15 +165,17 @@ func (s *practiceService) templateByID(templateID uint64) (PracticeTemplate, boo
 }
 
 type InMemoryPracticeSessionStore struct {
-	mu       sync.Mutex
-	nextID   uint64
-	sessions map[uint64]domain.PracticeSession
+	mu            sync.Mutex
+	nextID        uint64
+	sessions      map[uint64]domain.PracticeSession
+	currentByUser map[uint64]uint64
 }
 
 func NewInMemoryPracticeSessionStore() *InMemoryPracticeSessionStore {
 	return &InMemoryPracticeSessionStore{
-		nextID:   1,
-		sessions: make(map[uint64]domain.PracticeSession),
+		nextID:        1,
+		sessions:      make(map[uint64]domain.PracticeSession),
+		currentByUser: make(map[uint64]uint64),
 	}
 }
 
@@ -143,5 +186,33 @@ func (s *InMemoryPracticeSessionStore) CreatePracticeSession(_ context.Context, 
 	session.ID = s.nextID
 	s.nextID++
 	s.sessions[session.ID] = session
+	s.currentByUser[session.UserID] = session.ID
+	return session, nil
+}
+
+func (s *InMemoryPracticeSessionStore) CurrentPracticeSession(_ context.Context, userID uint64) (domain.PracticeSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sessionID, ok := s.currentByUser[userID]
+	if !ok {
+		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionNotFound)
+	}
+
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionNotFound)
+	}
+	return session, nil
+}
+
+func (s *InMemoryPracticeSessionStore) PracticeSessionByID(_ context.Context, sessionID uint64) (domain.PracticeSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionNotFound)
+	}
 	return session, nil
 }

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 
@@ -63,6 +63,9 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Template: Standard")).toBeInTheDocument();
     expect(screen.getByText("Signed out")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Refresh session" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders a loading shell while checking for a current session", () => {
@@ -104,11 +107,14 @@ describe("App", () => {
   });
 
   it("renders the live workbench when there is an active session", () => {
+    const refresh = vi.fn();
+    const reconnect = vi.fn();
+
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
       error: null,
-      refresh: vi.fn(),
+      refresh,
     });
 
     mockUseTerminalSession.mockReturnValue({
@@ -129,7 +135,7 @@ describe("App", () => {
       ],
       terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
       error: null,
-      reconnect: vi.fn(),
+      reconnect,
     });
 
     render(<App />);
@@ -143,5 +149,11 @@ describe("App", () => {
     expect(screen.getByText("History")).toBeInTheDocument();
     expect(screen.getByText("runner-42")).toBeInTheDocument();
     expect(screen.getByText("git status")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect terminal" }));
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(reconnect).toHaveBeenCalledTimes(1);
   });
 });

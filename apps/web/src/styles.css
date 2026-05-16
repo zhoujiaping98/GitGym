@@ -94,6 +94,13 @@ a {
   gap: 0.875rem;
 }
 
+.top-bar-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 .brand-mark {
   width: 2.25rem;
   height: 2.25rem;
@@ -141,6 +148,37 @@ a {
 
 .top-bar-actions {
   font-size: 0.8rem;
+}
+
+.top-bar-button {
+  border: 1px solid rgba(16, 33, 58, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 0.55rem 0.8rem;
+  transition:
+    transform 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.top-bar-button:hover,
+.top-bar-button:focus-visible {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(16, 33, 58, 0.24);
+  transform: translateY(-1px);
+}
+
+.top-bar-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.top-bar-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+  transform: none;
 }
 
 .login-screen {
@@ -648,6 +686,11 @@ a {
   .top-bar-actions {
     width: 100%;
     justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .top-bar-controls {
+    justify-content: flex-start;
   }
 
   .login-copy h1 {

@@ -81,6 +81,13 @@ func runCommand(workspacePath string, parts []string) (CommandResult, error) {
 
 	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
 	cmd.Dir = workspacePath
+	cmd.Env = append(
+		os.Environ(),
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"HOME="+workspacePath,
+		"USERPROFILE="+workspacePath,
+		"XDG_CONFIG_HOME="+workspacePath,
+	)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
