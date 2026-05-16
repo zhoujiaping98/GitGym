@@ -271,6 +271,7 @@ a {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.54), rgba(243, 246, 250, 0.34));
   border: 1px solid rgba(255, 255, 255, 0.4);
   box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
 .preview-frame::before {
@@ -298,7 +299,26 @@ a {
   min-height: 32rem;
   transform: perspective(1600px) rotateY(-11deg) rotateX(5deg) scale(0.98);
   transform-origin: right center;
-  filter: saturate(0.95);
+  filter: blur(6px) saturate(0.72) brightness(0.92);
+  opacity: 0.86;
+}
+
+.preview-frame::after {
+  content: "Signed-out preview";
+  position: absolute;
+  inset: auto auto 1.8rem 1.8rem;
+  z-index: 1;
+  padding: 0.6rem 0.85rem;
+  border-radius: 999px;
+  background: rgba(16, 33, 58, 0.78);
+  border: 1px solid rgba(121, 255, 177, 0.22);
+  box-shadow: 0 10px 24px rgba(16, 33, 58, 0.22);
+  color: rgba(245, 255, 248, 0.94);
+  font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  backdrop-filter: blur(8px);
 }
 
 .workbench-main,
