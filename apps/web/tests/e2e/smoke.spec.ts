@@ -50,4 +50,24 @@ test.describe("GitGym shell", () => {
     await expect(page.getByText("Repository")).toBeVisible();
     await expect(page.getByText("History")).toBeVisible();
   });
+
+  test("shows a retryable session error state when lookup fails", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/practice-sessions/current", async (route) => {
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "api offline" }),
+      });
+    });
+
+    await page.goto("/");
+
+    await expect(page.getByText("Session unavailable")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Continue with GitHub" }),
+    ).toHaveCount(0);
+  });
 });

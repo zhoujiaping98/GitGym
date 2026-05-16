@@ -521,6 +521,18 @@ a {
   border: 1px solid rgba(121, 255, 177, 0.24);
 }
 
+.session-status-pending {
+  background: rgba(16, 33, 58, 0.08);
+  color: var(--ink-soft);
+  border: 1px solid rgba(16, 33, 58, 0.12);
+}
+
+.session-status-error {
+  background: rgba(166, 56, 44, 0.1);
+  color: #8e2d22;
+  border: 1px solid rgba(166, 56, 44, 0.16);
+}
+
 .live-shell {
   position: relative;
   z-index: 1;
@@ -548,6 +560,56 @@ a {
   font-size: 1.02rem;
   line-height: 1.7;
   color: var(--ink-soft);
+}
+
+.session-state-shell {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  min-height: calc(100vh - 5rem);
+  padding: 3rem 2rem;
+}
+
+.session-state-card {
+  width: min(100%, 34rem);
+  padding: 2rem;
+  border-radius: 1.6rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(244, 247, 251, 0.92));
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  box-shadow: var(--shadow);
+}
+
+.session-state-card h1 {
+  margin: 0;
+  font-size: clamp(2.4rem, 4vw, 3.4rem);
+  line-height: 0.98;
+  letter-spacing: -0.04em;
+}
+
+.session-state-card p {
+  margin: 1rem 0 0;
+  font-size: 1.02rem;
+  line-height: 1.7;
+  color: var(--ink-soft);
+}
+
+.session-state-detail {
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  border-radius: 1rem;
+  background: rgba(16, 33, 58, 0.05);
+  border: 1px solid rgba(16, 33, 58, 0.08);
+  color: var(--ink-soft);
+  font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.session-state-action {
+  margin-top: 1.25rem;
+  border: 0;
+  cursor: pointer;
 }
 
 @media (max-width: 1080px) {

@@ -3,7 +3,7 @@ import { SessionStatusBadge } from "./SessionStatusBadge";
 type TopBarProps = {
   metaLabel: string;
   sessionLabel: string;
-  tone?: "idle" | "active";
+  tone?: "idle" | "active" | "pending" | "error";
 };
 
 export function TopBar({

@@ -6,28 +6,7 @@ import type {
   TerminalSessionState,
 } from "../types";
 
-const unavailableSummary =
-  "Live terminal transport will arrive with Task 10. Session metadata is available now.";
-
-function makeSeedTranscript(session: PracticeSession): string[] {
-  return [
-    `$ gitgym attach --session ${session.id}`,
-    `runner=${session.runnerRef}`,
-    `workspace=${session.workspacePath}`,
-  ];
-}
-
-function makeSeedHistory(session: PracticeSession): CommandHistoryEntry[] {
-  return [
-    {
-      id: `session-${session.id}-attach`,
-      command: `gitgym attach --session ${session.id}`,
-      executedAt: session.lastActivityAt,
-      exitCode: 0,
-      summary: "Workbench attached to active practice session",
-    },
-  ];
-}
+const unavailableSummary = "Terminal transport is unavailable for this session.";
 
 export function useTerminalSession(
   session: PracticeSession | null,
@@ -64,8 +43,8 @@ export function useTerminalSession(
     setStatus("connecting");
     setTerminalUrl(nextTerminalUrl);
     setError(null);
-    setTranscript(makeSeedTranscript(session));
-    setHistory(makeSeedHistory(session));
+    setTranscript([]);
+    setHistory([]);
 
     if (typeof WebSocket === "undefined") {
       setStatus("unavailable");
@@ -73,7 +52,19 @@ export function useTerminalSession(
       return;
     }
 
-    const socket = new WebSocket(nextTerminalUrl);
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(nextTerminalUrl);
+    } catch (connectError) {
+      setStatus("error");
+      setError(
+        connectError instanceof Error
+          ? connectError.message
+          : "Unable to open terminal transport.",
+      );
+      return;
+    }
+
     socketRef.current = socket;
 
     socket.addEventListener("open", () => {
@@ -82,7 +73,6 @@ export function useTerminalSession(
       }
 
       setStatus("ready");
-      setTranscript((lines) => [...lines, "Terminal connection established."]);
     });
 
     socket.addEventListener("message", (event) => {
@@ -109,11 +99,11 @@ export function useTerminalSession(
       }
 
       setStatus((currentStatus) =>
-        currentStatus === "ready" ? "idle" : "unavailable",
+        currentStatus === "connecting" || currentStatus === "ready"
+          ? "unavailable"
+          : currentStatus,
       );
-      setTranscript((lines) =>
-        lines.includes(unavailableSummary) ? lines : [...lines, unavailableSummary],
-      );
+      setError((currentError) => currentError ?? unavailableSummary);
     });
 
     return () => {

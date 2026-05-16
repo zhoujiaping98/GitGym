@@ -40,7 +40,7 @@ export function CommandHistoryPanel({
         </div>
       ) : (
         <p className="history-empty">
-          Command history will populate once terminal events are available.
+          No command history has been received for this session.
         </p>
       )}
     </section>

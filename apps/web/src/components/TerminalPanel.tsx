@@ -20,7 +20,7 @@ function statusLabel(status: TerminalSessionState["status"]) {
     case "ready":
       return "interactive";
     case "unavailable":
-      return "transport pending";
+      return "unavailable";
     case "error":
       return "error";
     default:
@@ -33,6 +33,11 @@ export function TerminalPanel({
   terminal,
 }: TerminalPanelProps) {
   const lines = preview ? previewLines : terminal.transcript;
+  const emptyMessage = terminal.error
+    ? terminal.error
+    : terminal.status === "connecting"
+      ? "Opening terminal transport..."
+      : "Terminal output has not arrived yet.";
 
   return (
     <section className="workbench-main">
@@ -50,9 +55,7 @@ export function TerminalPanel({
             </div>
           ))
         ) : (
-          <p className="terminal-empty">
-            Connect to a practice session to activate the terminal workbench.
-          </p>
+          <p className="terminal-empty">{preview ? previewLines[0] : emptyMessage}</p>
         )}
       </div>
       {!preview && terminal.terminalUrl ? (

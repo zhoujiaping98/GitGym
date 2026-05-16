@@ -1,6 +1,6 @@
 type SessionStatusBadgeProps = {
   label: string;
-  tone?: "idle" | "active";
+  tone?: "idle" | "active" | "pending" | "error";
 };
 
 export function SessionStatusBadge({

@@ -65,6 +65,44 @@ describe("App", () => {
     expect(screen.getByText("Signed out")).toBeInTheDocument();
   });
 
+  it("renders a loading shell while checking for a current session", () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "loading",
+      session: null,
+      error: null,
+      refresh: vi.fn(),
+    });
+
+    render(<App />);
+
+    expect(screen.getByText("Checking session")).toBeInTheDocument();
+    expect(screen.getByText("Restoring your practice workbench.")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Continue with GitHub" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders a retryable error shell when current session lookup fails", () => {
+    const refresh = vi.fn();
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "error",
+      session: null,
+      error: "api offline",
+      refresh,
+    });
+
+    render(<App />);
+
+    expect(screen.getByText("Session unavailable")).toBeInTheDocument();
+    expect(screen.getByText("We could not restore your current practice session.")).toBeInTheDocument();
+    expect(screen.getByText("api offline")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Continue with GitHub" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders the live workbench when there is an active session", () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",

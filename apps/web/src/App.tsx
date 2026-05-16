@@ -12,23 +12,67 @@ function templateLabel(templateId: number | null) {
   return templateId ? `Template #${templateId}` : "Template: Standard";
 }
 
+type AppStateShellProps = {
+  eyebrow: string;
+  title: string;
+  body: string;
+  detail?: string | null;
+  actionLabel?: string;
+  onAction?: () => void;
+};
+
+function AppStateShell({
+  eyebrow,
+  title,
+  body,
+  detail,
+  actionLabel,
+  onAction,
+}: AppStateShellProps) {
+  return (
+    <main className="session-state-shell">
+      <section className="session-state-card">
+        <span className="preview-label">{eyebrow}</span>
+        <h1>{title}</h1>
+        <p>{body}</p>
+        {detail ? <div className="session-state-detail">{detail}</div> : null}
+        {actionLabel && onAction ? (
+          <button className="primary-button session-state-action" onClick={onAction} type="button">
+            {actionLabel}
+          </button>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
 export default function App() {
   const currentSession = useCurrentSession();
   const terminalSession = useTerminalSession(currentSession.session);
   const hasActiveSession = currentSession.status === "ready" && currentSession.session;
+  const sessionTone =
+    currentSession.status === "loading"
+      ? "pending"
+      : currentSession.status === "error"
+        ? "error"
+        : hasActiveSession
+          ? "active"
+          : "idle";
+  const sessionLabel =
+    hasActiveSession
+      ? "Session live"
+      : currentSession.status === "loading"
+        ? "Checking session"
+        : currentSession.status === "error"
+          ? "Session unavailable"
+          : "Signed out";
 
   return (
     <div className="app-shell">
       <TopBar
         metaLabel={templateLabel(currentSession.session?.templateId ?? null)}
-        sessionLabel={
-          hasActiveSession
-            ? "Session live"
-            : currentSession.status === "loading"
-              ? "Checking session"
-              : "Signed out"
-        }
-        tone={hasActiveSession ? "active" : "idle"}
+        sessionLabel={sessionLabel}
+        tone={sessionTone}
       />
       {hasActiveSession ? (
         <main className="live-shell">
@@ -42,6 +86,23 @@ export default function App() {
           </div>
           <Workbench session={currentSession.session} terminal={terminalSession} />
         </main>
+      ) : currentSession.status === "loading" ? (
+        <AppStateShell
+          eyebrow="Restoring session"
+          title="Checking session"
+          body="Restoring your practice workbench."
+        />
+      ) : currentSession.status === "error" ? (
+        <AppStateShell
+          eyebrow="Session lookup"
+          title="Session unavailable"
+          body="We could not restore your current practice session."
+          detail={currentSession.error}
+          actionLabel="Try again"
+          onAction={() => {
+            void currentSession.refresh();
+          }}
+        />
       ) : (
         <LoginScreen preview={<Workbench preview />} />
       )}

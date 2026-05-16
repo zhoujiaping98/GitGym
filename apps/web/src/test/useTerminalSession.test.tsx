@@ -1,0 +1,88 @@
+import { renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useTerminalSession } from "../hooks/useTerminalSession";
+import type { PracticeSession } from "../types";
+
+const activeSession: PracticeSession = {
+  id: 42,
+  userId: 7,
+  scenarioId: 9,
+  templateId: 1,
+  runnerRef: "runner-42",
+  workspacePath: "/tmp/gitgym/session-42",
+  status: "active",
+  startedAt: "2026-05-16T10:00:00.000Z",
+  expiresAt: "2026-05-16T12:00:00.000Z",
+  lastActivityAt: "2026-05-16T10:05:00.000Z",
+};
+
+type ListenerMap = Record<string, Array<(event?: MessageEvent) => void>>;
+
+class MockWebSocket {
+  static instances: MockWebSocket[] = [];
+
+  url: string;
+  listeners: ListenerMap = {};
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: (event?: MessageEvent) => void) {
+    this.listeners[type] ??= [];
+    this.listeners[type].push(listener);
+  }
+
+  close() {
+    return undefined;
+  }
+
+  emit(type: string, event?: MessageEvent) {
+    for (const listener of this.listeners[type] ?? []) {
+      listener(event);
+    }
+  }
+}
+
+afterEach(() => {
+  MockWebSocket.instances = [];
+  vi.unstubAllGlobals();
+});
+
+describe("useTerminalSession", () => {
+  it("starts empty while attempting a live terminal connection", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() => useTerminalSession(activeSession));
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("connecting");
+    });
+
+    expect(result.current.transcript).toEqual([]);
+    expect(result.current.history).toEqual([]);
+    expect(result.current.error).toBeNull();
+    expect(result.current.terminalUrl).toContain("/practice-sessions/42/terminal");
+  });
+
+  it("marks the terminal unavailable without inventing transcript or history entries", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() => useTerminalSession(activeSession));
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+
+    MockWebSocket.instances[0].emit("error");
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+
+    expect(result.current.transcript).toEqual([]);
+    expect(result.current.history).toEqual([]);
+    expect(result.current.error).toBe("Terminal transport is unavailable for this session.");
+  });
+});
