@@ -4,7 +4,17 @@
   "type": "object",
   "required": ["type", "practiceSessionId", "createdAt", "payload"],
   "properties": {
-    "type": { "type": "string" },
+    "type": {
+      "type": "string",
+      "enum": [
+        "session_created",
+        "session_reset",
+        "command_started",
+        "command_finished",
+        "session_expired",
+        "runner_reassigned"
+      ]
+    },
     "practiceSessionId": { "type": "string" },
     "commandRunId": { "type": ["string", "null"] },
     "createdAt": { "type": "string", "format": "date-time" },

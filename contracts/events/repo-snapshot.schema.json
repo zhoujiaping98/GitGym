@@ -8,7 +8,7 @@
     "headCommit": { "type": "string" },
     "branchName": { "type": ["string", "null"] },
     "detachedHead": { "type": "boolean" },
-    "statusSummary": { "type": "object", "additionalProperties": true },
+    "statusSummary": { "type": "array", "items": { "type": "string" } },
     "operationState": { "type": "object", "additionalProperties": true },
     "recentGraph": { "type": "array" },
     "refsSummary": { "type": "object", "additionalProperties": true },

@@ -26,6 +26,12 @@ paths:
   /api/v1/practice-sessions/{sessionId}/reset:
     post:
       operationId: resetPracticeSession
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
       responses:
         "202":
           description: Session reset accepted
