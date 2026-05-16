@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SessionEvent",
+  "type": "object",
+  "required": ["type", "practiceSessionId", "createdAt", "payload"],
+  "properties": {
+    "type": { "type": "string" },
+    "practiceSessionId": { "type": "string" },
+    "commandRunId": { "type": ["string", "null"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object", "additionalProperties": true }
+  }
+}

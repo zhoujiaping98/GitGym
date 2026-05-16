@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RepoSnapshot",
+  "type": "object",
+  "required": ["headCommit", "statusSummary", "capturedAt"],
+  "properties": {
+    "headRef": { "type": ["string", "null"] },
+    "headCommit": { "type": "string" },
+    "branchName": { "type": ["string", "null"] },
+    "detachedHead": { "type": "boolean" },
+    "statusSummary": { "type": "object", "additionalProperties": true },
+    "operationState": { "type": "object", "additionalProperties": true },
+    "recentGraph": { "type": "array" },
+    "refsSummary": { "type": "object", "additionalProperties": true },
+    "capturedAt": { "type": "string", "format": "date-time" }
+  }
+}

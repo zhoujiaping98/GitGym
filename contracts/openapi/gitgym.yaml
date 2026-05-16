@@ -1,0 +1,31 @@
+openapi: 3.1.0
+info:
+  title: GitGym API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/v1/auth/me:
+    get:
+      operationId: getCurrentUser
+      responses:
+        "200":
+          description: Current user
+  /api/v1/templates:
+    get:
+      operationId: listTemplates
+      responses:
+        "200":
+          description: Template list
+  /api/v1/practice-sessions:
+    post:
+      operationId: createPracticeSession
+      responses:
+        "201":
+          description: Practice session created
+  /api/v1/practice-sessions/{sessionId}/reset:
+    post:
+      operationId: resetPracticeSession
+      responses:
+        "202":
+          description: Session reset accepted

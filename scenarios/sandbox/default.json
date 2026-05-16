@@ -1,0 +1,16 @@
+{
+  "key": "sandbox-default",
+  "modeType": "sandbox",
+  "templateKey": "standard",
+  "name": "Default Sandbox",
+  "description": "A freeform Git practice session with real command execution and no completion goal.",
+  "rules": {
+    "network": "deny",
+    "workspaceScope": "session-root",
+    "allowedShell": ["git", "ls", "pwd", "cat"]
+  },
+  "completionRules": null,
+  "hintPolicy": {
+    "mode": "silent"
+  }
+}
