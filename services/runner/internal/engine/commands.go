@@ -197,7 +197,12 @@ func parseCommand(raw string) ([]string, error) {
 		r := runes[i]
 		switch {
 		case inQuote != 0:
-			if r == '\\' && i+1 < len(runes) && (runes[i+1] == inQuote || runes[i+1] == '\\') {
+			if r == '\\' && i+1 < len(runes) && runes[i+1] == '\\' {
+				current = append(current, runes[i+1])
+				sawToken = true
+				tokenStarted = true
+				i++
+			} else if r == '\\' && i+1 < len(runes) && runes[i+1] == inQuote && !quoteTerminatesToken(runes, i+1) {
 				current = append(current, runes[i+1])
 				sawToken = true
 				tokenStarted = true
@@ -233,4 +238,17 @@ func parseCommand(raw string) ([]string, error) {
 	}
 
 	return parts, nil
+}
+
+func quoteTerminatesToken(runes []rune, quoteIndex int) bool {
+	if quoteIndex+1 >= len(runes) {
+		return true
+	}
+
+	switch runes[quoteIndex+1] {
+	case ' ', '\t', '\n', '\r':
+		return true
+	default:
+		return false
+	}
 }

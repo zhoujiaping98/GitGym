@@ -77,6 +77,23 @@ func TestParseCommandPreservesQuotedWindowsPathEndingWithBackslash(t *testing.T)
 	}
 }
 
+func TestParseCommandPreservesQuotedWindowsPathEndingWithSingleBackslash(t *testing.T) {
+	parts, err := parseCommand("git add \"C:\\tmp\\dir\\\"")
+	if err != nil {
+		t.Fatalf("parse command: %v", err)
+	}
+
+	want := []string{"git", "add", `C:\tmp\dir\`}
+	if len(parts) != len(want) {
+		t.Fatalf("expected %d parts, got %d: %#v", len(want), len(parts), parts)
+	}
+	for i := range want {
+		if parts[i] != want[i] {
+			t.Fatalf("expected part %d to be %q, got %q", i, want[i], parts[i])
+		}
+	}
+}
+
 func TestRunCommandReturnsTimeoutError(t *testing.T) {
 	t.Setenv("GITGYM_RUNNER_COMMAND_TIMEOUT", "10ms")
 
@@ -233,6 +250,28 @@ func TestRunCommandWithEventsPreservesExecutionOutcomeWhenPostSnapshotFails(t *t
 	}
 	if got := events[1].Payload["error"]; got != nil {
 		t.Fatalf("expected command error payload to remain unset, got %#v", got)
+	}
+}
+
+func TestRunCommandWithEventsIncludesTimeoutErrorPayload(t *testing.T) {
+	t.Setenv("GITGYM_RUNNER_COMMAND_TIMEOUT", "10ms")
+	workspace := createCommittedWorkspace(t)
+	recorder := NewEventRecorder()
+
+	result, err := RunCommandWithEvents(workspace, "git daemon", "ws-1", recorder)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if result != (CommandResult{}) {
+		t.Fatalf("expected zero result on timeout, got %#v", result)
+	}
+
+	events := recorder.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	if got := events[1].Payload["error"]; got == nil || !strings.Contains(got.(string), "timed out") {
+		t.Fatalf("expected timeout error payload, got %#v", got)
 	}
 }
 
