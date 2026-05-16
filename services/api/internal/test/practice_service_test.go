@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -75,6 +76,78 @@ func TestPracticeServiceCreatesSessionFromRunnerWorkspace(t *testing.T) {
 	}
 }
 
+func TestPracticeServiceClassifiesCreateSessionErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejects missing input", func(t *testing.T) {
+		svc := service.NewPracticeService(&stubPracticeSessionStore{}, &stubRunnerClient{}, time.Now)
+
+		_, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{})
+
+		if !errors.Is(err, service.ErrInvalidPracticeSessionInput) {
+			t.Fatalf("expected invalid input error, got %v", err)
+		}
+	})
+
+	t.Run("rejects unknown template", func(t *testing.T) {
+		svc := service.NewPracticeService(&stubPracticeSessionStore{}, &stubRunnerClient{}, time.Now)
+
+		_, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+			UserID:     42,
+			ScenarioID: 7,
+			TemplateID: 999,
+		})
+
+		if !errors.Is(err, service.ErrUnknownPracticeTemplate) {
+			t.Fatalf("expected unknown template error, got %v", err)
+		}
+	})
+
+	t.Run("reports missing configuration", func(t *testing.T) {
+		svc := service.NewPracticeService(nil, &stubRunnerClient{}, time.Now)
+
+		_, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+			UserID:     42,
+			ScenarioID: 7,
+			TemplateID: 1,
+		})
+
+		if !errors.Is(err, service.ErrPracticeServiceConfiguration) {
+			t.Fatalf("expected service configuration error, got %v", err)
+		}
+	})
+
+	t.Run("reports runner client configuration errors as service configuration", func(t *testing.T) {
+		svc := service.NewPracticeService(&stubPracticeSessionStore{}, runner.NewClient("", nil), time.Now)
+
+		_, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+			UserID:     42,
+			ScenarioID: 7,
+			TemplateID: 1,
+		})
+
+		if !errors.Is(err, service.ErrPracticeServiceConfiguration) {
+			t.Fatalf("expected service configuration error, got %v", err)
+		}
+	})
+
+	t.Run("wraps runner creation failure", func(t *testing.T) {
+		svc := service.NewPracticeService(&stubPracticeSessionStore{}, &stubRunnerClient{
+			err: errors.New("runner unavailable"),
+		}, time.Now)
+
+		_, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+			UserID:     42,
+			ScenarioID: 7,
+			TemplateID: 1,
+		})
+
+		if !errors.Is(err, service.ErrRunnerWorkspaceCreation) {
+			t.Fatalf("expected runner creation error, got %v", err)
+		}
+	})
+}
+
 type stubPracticeSessionStore struct {
 	createCalls  int
 	lastSession  domain.PracticeSession
@@ -93,10 +166,14 @@ type stubRunnerClient struct {
 	createWorkspaceCalls int
 	lastTemplate         string
 	workspace            runner.Workspace
+	err                  error
 }
 
 func (s *stubRunnerClient) CreateWorkspace(_ context.Context, template string) (runner.Workspace, error) {
 	s.createWorkspaceCalls++
 	s.lastTemplate = template
+	if s.err != nil {
+		return runner.Workspace{}, s.err
+	}
 	return s.workspace, nil
 }

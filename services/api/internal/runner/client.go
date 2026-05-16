@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 )
+
+var ErrClientNotConfigured = errors.New("runner client is not configured")
 
 type Workspace struct {
 	ID       string `json:"id"`
@@ -37,7 +40,7 @@ func NewClient(baseURL string, httpClient *http.Client) *HTTPClient {
 
 func (c *HTTPClient) CreateWorkspace(ctx context.Context, template string) (Workspace, error) {
 	if c.baseURL == "" {
-		return Workspace{}, fmt.Errorf("runner base URL is not configured")
+		return Workspace{}, ErrClientNotConfigured
 	}
 
 	payload := struct {

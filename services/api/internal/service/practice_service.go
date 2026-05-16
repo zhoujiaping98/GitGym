@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -11,6 +12,13 @@ import (
 )
 
 const practiceSessionTTL = 2 * time.Hour
+
+var (
+	ErrInvalidPracticeSessionInput  = errors.New("invalid practice session input")
+	ErrUnknownPracticeTemplate      = errors.New("unknown practice template")
+	ErrPracticeServiceConfiguration = errors.New("practice service configuration error")
+	ErrRunnerWorkspaceCreation      = errors.New("runner workspace creation failed")
+)
 
 type PracticeTemplate struct {
 	ID   uint64 `json:"id"`
@@ -62,20 +70,27 @@ func (s *practiceService) ListTemplates(_ context.Context) []PracticeTemplate {
 }
 
 func (s *practiceService) CreatePracticeSession(ctx context.Context, input CreatePracticeSessionInput) (domain.PracticeSession, error) {
+	if input.UserID == 0 || input.ScenarioID == 0 || input.TemplateID == 0 {
+		return domain.PracticeSession{}, fmt.Errorf("%w", ErrInvalidPracticeSessionInput)
+	}
+
 	template, ok := s.templateByID(input.TemplateID)
 	if !ok {
-		return domain.PracticeSession{}, fmt.Errorf("unknown template ID %d", input.TemplateID)
+		return domain.PracticeSession{}, fmt.Errorf("%w: %d", ErrUnknownPracticeTemplate, input.TemplateID)
 	}
 	if s.runner == nil {
-		return domain.PracticeSession{}, fmt.Errorf("runner client is not configured")
+		return domain.PracticeSession{}, fmt.Errorf("%w: runner client is not configured", ErrPracticeServiceConfiguration)
 	}
 	if s.store == nil {
-		return domain.PracticeSession{}, fmt.Errorf("practice session store is not configured")
+		return domain.PracticeSession{}, fmt.Errorf("%w: practice session store is not configured", ErrPracticeServiceConfiguration)
 	}
 
 	workspace, err := s.runner.CreateWorkspace(ctx, template.Key)
 	if err != nil {
-		return domain.PracticeSession{}, fmt.Errorf("create runner workspace: %w", err)
+		if errors.Is(err, runner.ErrClientNotConfigured) {
+			return domain.PracticeSession{}, fmt.Errorf("%w: %v", ErrPracticeServiceConfiguration, err)
+		}
+		return domain.PracticeSession{}, fmt.Errorf("%w: %v", ErrRunnerWorkspaceCreation, err)
 	}
 
 	now := s.now().UTC()
