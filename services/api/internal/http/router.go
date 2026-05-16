@@ -2,15 +2,46 @@ package httpx
 
 import (
 	"net/http"
+	"os"
+	"time"
 
-	"github.com/go-chi/chi/v5"
 	"gitgym/services/api/internal/http/handlers"
 	"gitgym/services/api/internal/http/middleware"
+	"gitgym/services/api/internal/runner"
+	"gitgym/services/api/internal/service"
+	"github.com/go-chi/chi/v5"
 )
 
-func NewRouter() http.Handler {
+type Dependencies struct {
+	PracticeService service.PracticeService
+}
+
+func NewRouter(deps ...Dependencies) http.Handler {
+	dependencies := defaultDependencies()
+	if len(deps) > 0 && deps[0].PracticeService != nil {
+		dependencies.PracticeService = deps[0].PracticeService
+	}
+
 	r := chi.NewRouter()
 	r.Get("/healthz", handlers.Health())
-	r.With(middleware.RequireSessionCookie).Get("/api/v1/auth/me", handlers.AuthMe())
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequireSessionCookie)
+			r.Get("/auth/me", handlers.AuthMe())
+			r.Get("/practice/templates", handlers.ListPracticeTemplates(dependencies.PracticeService))
+			r.Post("/practice/sessions", handlers.CreatePracticeSession(dependencies.PracticeService))
+			r.Get("/practice/sessions/{sessionID}/terminal/ws", handlers.PracticeTerminalWebsocket())
+		})
+	})
 	return r
+}
+
+func defaultDependencies() Dependencies {
+	return Dependencies{
+		PracticeService: service.NewPracticeService(
+			service.NewInMemoryPracticeSessionStore(),
+			runner.NewClient(os.Getenv("RUNNER_BASE_URL"), http.DefaultClient),
+			time.Now,
+		),
+	}
 }
