@@ -25,7 +25,7 @@ func RunCommand(workspacePath string, raw string) (CommandResult, error) {
 
 func RunCommandWithEvents(workspacePath string, raw string, workspaceID string, recorder *EventRecorder) (CommandResult, error) {
 	if recorder != nil {
-		recorder.Record("command.started", workspaceID, map[string]any{
+		recorder.Record("command_started", workspaceID, map[string]any{
 			"raw": raw,
 		})
 	}
@@ -42,7 +42,7 @@ func RunCommandWithEvents(workspacePath string, raw string, workspaceID string, 
 		} else {
 			payload["error"] = err.Error()
 		}
-		recorder.Record("command.finished", workspaceID, payload)
+		recorder.Record("command_finished", workspaceID, payload)
 	}
 
 	return result, err

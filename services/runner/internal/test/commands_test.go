@@ -55,8 +55,8 @@ func TestRunGitStatusAndCaptureSnapshot(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(events))
 	}
-	if events[0].Type != "command.started" {
-		t.Fatalf("expected first event type command.started, got %q", events[0].Type)
+	if events[0].Type != "command_started" {
+		t.Fatalf("expected first event type command_started, got %q", events[0].Type)
 	}
 	if events[0].WorkspaceID != workspace.ID {
 		t.Fatalf("expected workspace ID %q, got %q", workspace.ID, events[0].WorkspaceID)
@@ -64,8 +64,8 @@ func TestRunGitStatusAndCaptureSnapshot(t *testing.T) {
 	if got := events[0].Payload["raw"]; got != "git status --short" {
 		t.Fatalf("expected raw command payload, got %#v", got)
 	}
-	if events[1].Type != "command.finished" {
-		t.Fatalf("expected second event type command.finished, got %q", events[1].Type)
+	if events[1].Type != "command_finished" {
+		t.Fatalf("expected second event type command_finished, got %q", events[1].Type)
 	}
 	if got := events[1].Payload["exit_code"]; got != 0 {
 		t.Fatalf("expected exit code payload 0, got %#v", got)
