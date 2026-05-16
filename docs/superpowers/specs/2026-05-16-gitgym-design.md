@@ -275,25 +275,473 @@ Incident mode also reuses the same execution and observation core.
 - Session reset must be first-class, fast, and reliable.
 - Observability is a product feature, not only an engineering concern.
 
-## 13. Testing Strategy
+## 13. Technical Stack
+
+Version 1 should use a monorepo, but not a frontend-backend code dump. The codebase should be split by responsibility.
+
+### 13.1 Frontend
+
+- React
+- TypeScript
+- Vite
+- xterm.js for terminal rendering
+
+The frontend is responsible for:
+
+- terminal interaction
+- repository state display
+- session controls
+- command history views
+
+Version 1 frontend target:
+
+- desktop-first web application
+- no native Windows application in version 1
+- mobile is out of scope beyond basic accessibility
+
+### 13.1.1 Frontend Workspace Layout
+
+Version 1 should use a single-page workbench layout rather than an IDE-style multi-navigation shell.
+
+Recommended layout:
+
+```text
+Top Bar
+Main Workspace + Right Repository Panel
+Collapsible Bottom Command History Panel
+```
+
+Detailed structure:
+
+- Top Bar
+  - product identity
+  - selected repository template
+  - session state
+  - reset session
+  - create new session
+
+- Main Workspace
+  - terminal is the primary interaction surface
+  - command input and output stay in the main visual focus
+  - output must stream in real time
+
+- Right Repository Panel
+  - state summary
+  - mini commit graph
+
+- Bottom Collapsible Panel
+  - command history
+  - execution record summaries
+
+### 13.1.2 Repository Panel Content
+
+The right-side repository panel should use a mixed model: state summary plus a small commit graph.
+
+State summary should include:
+
+- current branch
+- HEAD reference
+- working tree status summary
+- in-progress operation markers such as merge, rebase, or cherry-pick
+
+Mini commit graph should include:
+
+- recent commits only
+- branch pointer markers
+- a compact visual summary rather than a full graph explorer
+
+### 13.1.3 Interaction Model
+
+The screen should reflect three distinct product roles:
+
+- terminal: where the user acts
+- repository panel: where the user sees what changed
+- command history panel: where the user reviews what happened
+
+This separation is intentional:
+
+- the terminal stays primary
+- the repository panel helps interpret Git state
+- the history panel supports replay and review without competing with the terminal
+
+### 13.1.4 UI States
+
+The workbench should explicitly support these states:
+
+- Idle
+  - terminal accepts input
+  - repository panel shows current state
+
+- Running
+  - command output streams live
+  - terminal input is locked or queued
+  - repository panel indicates active execution
+
+- Git Operation In Progress
+  - repository panel highlights special states such as merge conflict or rebase in progress
+
+- Session Expired or Failed
+  - terminal input is disabled
+  - top bar offers reset or new session actions
+
+### 13.1.5 Expansion Readiness
+
+The layout must remain stable as future modes are added.
+
+- Sandbox mode uses the layout with minimal extra UI
+- Challenge mode can attach objective cards to the right-side panel
+- Incident mode can attach failure context and recovery goals to the same side panel
+- Replay and explanation features can extend the bottom panel
+
+This preserves one durable workspace model across all future product modes.
+
+### 13.2 Backend
+
+- Go
+- `net/http` as the base HTTP layer
+- `chi` as the router and middleware composition layer
+- `github.com/coder/websocket` for WebSocket transport
+- `os/exec` plus `context` for process execution, timeout, and cancellation
+- MySQL as the primary relational database
+
+The backend is selected for long-term service stability, concurrency handling, and cleaner separation of control-plane and execution-plane concerns.
+
+### 13.3 Repository Layout
+
+Recommended structure:
+
+```text
+GitGym/
+  apps/
+    web/
+  services/
+    api/
+    runner/
+  contracts/
+    openapi/
+    events/
+  scenarios/
+    templates/
+    sandbox/
+    challenge/
+    incident/
+  docs/
+    superpowers/
+      specs/
+```
+
+### 13.4 Service Boundaries
+
+`services/api` is the control plane. It should own:
+
+- session lifecycle
+- authentication and quotas
+- template and scenario selection
+- browser-facing HTTP and WebSocket endpoints
+- orchestration of runner instances
+
+`services/runner` is the execution plane. It should own:
+
+- workspace creation
+- repository initialization and reset
+- command execution
+- repository observation and snapshot collection
+- cleanup and timeout enforcement
+
+The code should preserve this boundary from the start even if both services are initially deployed together.
+
+### 13.5 Contract Strategy
+
+Because the frontend and backend use different languages, shared TypeScript types are not the right integration model.
+
+The recommended contract strategy is:
+
+- OpenAPI for browser-facing API contracts
+- explicit event schemas for command output, session state, and replay records
+- generated frontend client types from the published API contract
+
+This keeps the system language-agnostic and makes future service extraction easier.
+
+### 13.6 Authentication
+
+Version 1 includes login.
+
+Recommended version 1 authentication model:
+
+- GitHub OAuth as the primary sign-in method
+- application-managed user session after successful OAuth callback
+
+Why this model fits:
+
+- the primary audience is developers
+- it avoids building a password system in version 1
+- it aligns well with future training, history, and account-bound personalization
+
+Version 1 should not include:
+
+- local username and password accounts
+- multi-provider identity federation
+- team or organization role models beyond simple user ownership
+
+### 13.7 Persistence Model
+
+The database stores product metadata and execution records, not full Git repositories.
+
+Store in MySQL:
+
+- users and login linkage
+- browser session records
+- workspace template definitions
+- scenario definitions
+- practice session metadata
+- command execution records
+- repository snapshot summaries
+- replay or audit event records
+- reset history
+
+Do not store in MySQL:
+
+- full repository contents
+- live working directories
+- raw repository templates as unpacked worktrees
+
+Those belong in runner-managed storage on disk or in a later object-storage layer.
+
+### 13.8 Core Tables
+
+#### users
+
+Purpose:
+
+- one row per product user
+
+Suggested fields:
+
+- id
+- github_user_id
+- github_login
+- display_name
+- avatar_url
+- email if available
+- created_at
+- updated_at
+- last_login_at
+- status
+
+#### auth_accounts
+
+Purpose:
+
+- identity provider linkage
+
+Suggested fields:
+
+- id
+- user_id
+- provider
+- provider_account_id
+- provider_username
+- access_token metadata if retained
+- refresh_token metadata if retained
+- created_at
+- updated_at
+
+Version 1 may only populate GitHub rows, but the table should still model provider linkage cleanly.
+
+#### user_sessions
+
+Purpose:
+
+- browser or app login session tracking
+
+Suggested fields:
+
+- id
+- user_id
+- session_token_hash
+- user_agent
+- ip_address summary
+- expires_at
+- created_at
+- revoked_at
+
+#### workspace_templates
+
+Purpose:
+
+- defines reusable starting repository templates
+
+Suggested fields:
+
+- id
+- key
+- name
+- description
+- mode_compatibility
+- source_ref
+- difficulty_level
+- is_active
+- created_at
+- updated_at
+
+#### scenarios
+
+Purpose:
+
+- shared abstraction for sandbox, challenge, and incident modes
+
+Suggested fields:
+
+- id
+- key
+- mode_type
+- template_id
+- name
+- description
+- rules_json
+- completion_rules_json
+- hint_policy_json
+- is_active
+- created_at
+- updated_at
+
+Sandbox scenarios can use minimal rule payloads.
+
+#### practice_sessions
+
+Purpose:
+
+- one user practice session bound to one scenario and one live repository instance
+
+Suggested fields:
+
+- id
+- user_id
+- scenario_id
+- template_id
+- runner_id or runner_ref
+- workspace_path_ref
+- status
+- started_at
+- expires_at
+- ended_at
+- last_activity_at
+
+#### command_runs
+
+Purpose:
+
+- one row per executed terminal command
+
+Suggested fields:
+
+- id
+- practice_session_id
+- sequence_no
+- raw_command
+- executable
+- args_json
+- cwd_ref
+- policy_decision
+- exit_code
+- duration_ms
+- stdout_preview
+- stderr_preview
+- started_at
+- finished_at
+
+Large raw output can be truncated in-table and stored elsewhere later if needed.
+
+#### repo_snapshots
+
+Purpose:
+
+- structured Git state summaries associated with command execution
+
+Suggested fields:
+
+- id
+- practice_session_id
+- command_run_id
+- snapshot_phase
+- head_ref
+- head_commit
+- branch_name
+- detached_head
+- status_summary_json
+- operation_state_json
+- recent_graph_json
+- refs_summary_json
+- captured_at
+
+The expected `snapshot_phase` values are typically pre-run and post-run.
+
+#### session_events
+
+Purpose:
+
+- audit and replay oriented event stream
+
+Suggested fields:
+
+- id
+- practice_session_id
+- command_run_id nullable
+- event_type
+- event_payload_json
+- created_at
+
+Examples include:
+
+- session_created
+- session_reset
+- command_started
+- command_finished
+- session_expired
+- runner_reassigned
+
+#### session_resets
+
+Purpose:
+
+- tracks explicit reset actions for audit and product analysis
+
+Suggested fields:
+
+- id
+- practice_session_id
+- user_id
+- reason_code
+- source_snapshot_id nullable
+- created_at
+
+### 13.9 Persistence Principles
+
+- Live repository state stays outside MySQL.
+- MySQL stores metadata, summaries, and audit history.
+- Session-to-user relationships must be explicit.
+- Scenario and template definitions must be reusable across many sessions.
+- Snapshot records should stay structured enough for query and replay use.
+
+## 14. Testing Strategy
 
 Version 1 needs testing at three levels.
 
-### 13.1 Unit Tests
+### 14.1 Unit Tests
 
 - policy gate behavior
 - scenario evaluation hooks
 - repository snapshot parsers
 - session lifecycle logic
 
-### 13.2 Integration Tests
+### 14.2 Integration Tests
 
 - template creation and reset
 - command execution pipeline
 - observation before and after command runs
 - cleanup and expiry behavior
 
-### 13.3 End-to-End Tests
+### 14.3 End-to-End Tests
 
 - start a session from the web UI
 - run commands and inspect output
@@ -302,9 +750,9 @@ Version 1 needs testing at three levels.
 
 The most important test priority is ensuring the platform remains consistent while running real Git workflows repeatedly.
 
-## 14. Risks and Mitigations
+## 15. Risks and Mitigations
 
-### 14.1 Over-designing for future modes
+### 15.1 Over-designing for future modes
 
 Risk:
 Version 1 slows down by trying to fully build challenge and incident infrastructure.
@@ -312,7 +760,7 @@ Version 1 slows down by trying to fully build challenge and incident infrastruct
 Mitigation:
 Ship only sandbox behavior in version 1, but keep Scenario as the shared abstraction.
 
-### 14.2 Weak isolation
+### 15.2 Weak isolation
 
 Risk:
 Terminal realism exposes the host environment.
@@ -320,7 +768,7 @@ Terminal realism exposes the host environment.
 Mitigation:
 Constrain the execution environment strictly to the workspace and a narrow approved command surface.
 
-### 14.3 Poor repository observability
+### 15.3 Poor repository observability
 
 Risk:
 The product feels like a raw terminal with little added value.
@@ -328,7 +776,7 @@ The product feels like a raw terminal with little added value.
 Mitigation:
 Invest early in command recording and repository state summaries.
 
-### 14.4 Template sprawl
+### 15.4 Template sprawl
 
 Risk:
 Too many templates create maintenance cost before user value is proven.
@@ -336,7 +784,7 @@ Too many templates create maintenance cost before user value is proven.
 Mitigation:
 Start with three templates only and expand based on usage.
 
-## 15. Recommended Build Order
+## 16. Recommended Build Order
 
 1. Session lifecycle and workspace creation
 2. Real command execution in isolated repositories
@@ -345,7 +793,7 @@ Start with three templates only and expand based on usage.
 5. Command history and reset
 6. Template system cleanup and scenario abstraction hardening
 
-## 16. Decision Record
+## 17. Decision Record
 
 Confirmed decisions from brainstorming:
 
@@ -353,13 +801,16 @@ Confirmed decisions from brainstorming:
 - Execution model: hybrid architecture with real Git underneath
 - First mode to ship: sandbox practice
 - Long-term expansion target: challenge mode and incident simulation
+- Frontend stack: React + TypeScript + Vite
+- Backend stack: Go + net/http + chi + coder/websocket + MySQL
+- Backend boundary: separate api control plane and runner execution plane
+- Contract approach: API and event schemas, not shared language-specific types
+- Authentication model: GitHub OAuth for version 1
 
-## 17. Open Items Deferred Beyond This Spec
+## 18. Open Items Deferred Beyond This Spec
 
 These are intentionally left for implementation planning:
 
-- exact backend framework
-- exact terminal transport mechanism
 - storage backend choice
 - containerization strategy versus process sandboxing
 - authentication and billing model
