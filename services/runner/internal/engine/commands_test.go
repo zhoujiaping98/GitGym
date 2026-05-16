@@ -42,6 +42,23 @@ func TestParseCommandPreservesExplicitEmptyQuotedArgument(t *testing.T) {
 	}
 }
 
+func TestParseCommandHandlesEscapedQuotesInsideQuotedArgument(t *testing.T) {
+	parts, err := parseCommand(`git commit -m "say \"hi\""`)
+	if err != nil {
+		t.Fatalf("parse command: %v", err)
+	}
+
+	want := []string{"git", "commit", "-m", `say "hi"`}
+	if len(parts) != len(want) {
+		t.Fatalf("expected %d parts, got %d: %#v", len(want), len(parts), parts)
+	}
+	for i := range want {
+		if parts[i] != want[i] {
+			t.Fatalf("expected part %d to be %q, got %q", i, want[i], parts[i])
+		}
+	}
+}
+
 func TestRunCommandReturnsTimeoutError(t *testing.T) {
 	t.Setenv("GITGYM_RUNNER_COMMAND_TIMEOUT", "10ms")
 

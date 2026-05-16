@@ -61,8 +61,23 @@ func copyPayload(payload map[string]any) map[string]any {
 
 	cloned := make(map[string]any, len(payload))
 	for key, value := range payload {
-		cloned[key] = value
+		cloned[key] = copyPayloadValue(value)
 	}
 
 	return cloned
+}
+
+func copyPayloadValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return copyPayload(typed)
+	case []any:
+		cloned := make([]any, len(typed))
+		for i, item := range typed {
+			cloned[i] = copyPayloadValue(item)
+		}
+		return cloned
+	default:
+		return value
+	}
 }

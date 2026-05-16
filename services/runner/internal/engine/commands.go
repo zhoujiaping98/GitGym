@@ -110,6 +110,7 @@ func parseCommand(raw string) ([]string, error) {
 		parts         []string
 		current       []rune
 		inQuote       rune
+		escaping      bool
 		sawToken      bool
 		tokenStarted  bool
 	)
@@ -125,11 +126,21 @@ func parseCommand(raw string) ([]string, error) {
 
 	for _, r := range raw {
 		switch {
+		case escaping:
+			if r == inQuote || r == '\\' {
+				current[len(current)-1] = r
+			} else {
+				current = append(current, r)
+			}
+			sawToken = true
+			tokenStarted = true
+			escaping = false
 		case inQuote != 0:
 			if r == '\\' {
 				current = append(current, r)
 				sawToken = true
 				tokenStarted = true
+				escaping = true
 			} else if r == inQuote {
 				inQuote = 0
 			} else {

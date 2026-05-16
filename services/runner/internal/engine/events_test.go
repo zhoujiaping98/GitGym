@@ -28,3 +28,26 @@ func TestEventRecorderCopiesPayloadOnEvents(t *testing.T) {
 		t.Fatalf("expected returned payload copy, got %#v", got)
 	}
 }
+
+func TestEventRecorderDeepCopiesNestedJSONLikePayloads(t *testing.T) {
+	recorder := NewEventRecorder()
+	payload := map[string]any{
+		"meta": map[string]any{
+			"args": []any{
+				"git",
+				map[string]any{"message": "hello"},
+			},
+		},
+	}
+
+	recorded := recorder.Record("command_started", "ws-1", payload)
+
+	payload["meta"].(map[string]any)["args"].([]any)[1].(map[string]any)["message"] = "mutated source"
+	recorded.Payload["meta"].(map[string]any)["args"].([]any)[1].(map[string]any)["message"] = "mutated return"
+
+	fresh := recorder.Events()
+	got := fresh[0].Payload["meta"].(map[string]any)["args"].([]any)[1].(map[string]any)["message"]
+	if got != "hello" {
+		t.Fatalf("expected nested payload to remain unchanged, got %#v", got)
+	}
+}
