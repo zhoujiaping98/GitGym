@@ -7,8 +7,8 @@ type CurrentUser struct {
 	GitHubID    uint64
 	GitHubLogin string
 	DisplayName string
-	AvatarURL   string
-	Email       string
+	AvatarURL   *string
+	Email       *string
 }
 
 type PracticeSession struct {
@@ -20,6 +20,7 @@ type PracticeSession struct {
 	WorkspacePathRef string
 	Status           string
 	StartedAt        time.Time
+	EndedAt          *time.Time
 	ExpiresAt        time.Time
 	LastActivityAt   time.Time
 }
