@@ -124,8 +124,8 @@ func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testi
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", rec.Code)
 	}
-	if recordingService.lastCreateInput.UserID != 42 {
-		t.Fatalf("expected handler to use authenticated user ID 42, got %d", recordingService.lastCreateInput.UserID)
+	if recordingService.lastCreateInput.UserID != 1 {
+		t.Fatalf("expected handler to use placeholder authenticated user ID 1, got %d", recordingService.lastCreateInput.UserID)
 	}
 	if recordingService.lastCreateInput.ScenarioID != 7 {
 		t.Fatalf("expected scenario ID 7, got %d", recordingService.lastCreateInput.ScenarioID)
@@ -154,7 +154,7 @@ func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testi
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if payload.Session.ID != 101 || payload.Session.UserID != 42 {
+	if payload.Session.ID != 101 || payload.Session.UserID != 1 {
 		t.Fatalf("unexpected session payload: %+v", payload.Session)
 	}
 	if payload.Session.RunnerRef != "ws-123" || payload.Session.WorkspacePath != "/tmp/ws-123" {
@@ -189,7 +189,7 @@ func TestCreatePracticeSessionMapsErrors(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":7,"template_id":1}`))
 			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "uid:42:session-token"})
+			req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "123"})
 			rec := httptest.NewRecorder()
 
 			router.ServeHTTP(rec, req)
