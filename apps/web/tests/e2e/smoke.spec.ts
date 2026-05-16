@@ -6,9 +6,9 @@ test.describe("GitGym shell", () => {
   }) => {
     await page.route("**/api/v1/practice-sessions/current", async (route) => {
       await route.fulfill({
-        status: 404,
+        status: 401,
         contentType: "application/json",
-        body: JSON.stringify({ error: "no active session" }),
+        body: JSON.stringify({ error: "unauthorized" }),
       });
     });
 
