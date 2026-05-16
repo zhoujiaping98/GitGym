@@ -126,7 +126,14 @@ CREATE TABLE session_events (
   id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
   practice_session_id BIGINT UNSIGNED NOT NULL,
   command_run_id BIGINT UNSIGNED NULL,
-  event_type VARCHAR(64) NOT NULL,
+  event_type ENUM(
+    'session_created',
+    'session_reset',
+    'command_started',
+    'command_finished',
+    'session_expired',
+    'runner_reassigned'
+  ) NOT NULL,
   event_payload_json JSON NOT NULL,
   created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   CONSTRAINT fk_session_events_session FOREIGN KEY (practice_session_id) REFERENCES practice_sessions(id),
