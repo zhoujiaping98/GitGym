@@ -1,6 +1,16 @@
 import { SessionStatusBadge } from "./SessionStatusBadge";
 
-export function TopBar() {
+type TopBarProps = {
+  metaLabel: string;
+  sessionLabel: string;
+  tone?: "idle" | "active";
+};
+
+export function TopBar({
+  metaLabel,
+  sessionLabel,
+  tone = "idle",
+}: TopBarProps) {
   return (
     <header className="top-bar">
       <div className="brand-lockup">
@@ -13,8 +23,8 @@ export function TopBar() {
         </div>
       </div>
       <div className="top-bar-actions">
-        <span className="top-bar-meta">Template: Standard</span>
-        <SessionStatusBadge label="Signed out" tone="idle" />
+        <span className="top-bar-meta">{metaLabel}</span>
+        <SessionStatusBadge label={sessionLabel} tone={tone} />
       </div>
     </header>
   );
