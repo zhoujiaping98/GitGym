@@ -107,18 +107,20 @@ func commandTimeout() time.Duration {
 
 func parseCommand(raw string) ([]string, error) {
 	var (
-		parts    []string
-		current  []rune
-		inQuote  rune
-		sawToken bool
+		parts         []string
+		current       []rune
+		inQuote       rune
+		sawToken      bool
+		tokenStarted  bool
 	)
 
 	flush := func() {
-		if len(current) == 0 {
+		if !tokenStarted {
 			return
 		}
 		parts = append(parts, string(current))
 		current = current[:0]
+		tokenStarted = false
 	}
 
 	for _, r := range raw {
@@ -127,20 +129,24 @@ func parseCommand(raw string) ([]string, error) {
 			if r == '\\' {
 				current = append(current, r)
 				sawToken = true
+				tokenStarted = true
 			} else if r == inQuote {
 				inQuote = 0
 			} else {
 				current = append(current, r)
 				sawToken = true
+				tokenStarted = true
 			}
 		case r == '"' || r == '\'':
 			inQuote = r
 			sawToken = true
+			tokenStarted = true
 		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
 			flush()
 		default:
 			current = append(current, r)
 			sawToken = true
+			tokenStarted = true
 		}
 	}
 
