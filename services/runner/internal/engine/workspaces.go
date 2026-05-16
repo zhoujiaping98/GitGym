@@ -18,5 +18,11 @@ func CreateWorkspace(root string) (Workspace, error) {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return Workspace{}, err
 	}
+
+	if err := InitStandardTemplate(path); err != nil {
+		_ = os.RemoveAll(path)
+		return Workspace{}, err
+	}
+
 	return Workspace{ID: id, Path: path}, nil
 }

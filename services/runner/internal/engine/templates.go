@@ -2,14 +2,20 @@ package engine
 
 import (
 	"os"
-	"os/exec"
+	"path/filepath"
 )
 
 func InitStandardTemplate(workspacePath string) error {
-	cmd := exec.Command("git", "init", "-b", "main")
-	cmd.Dir = workspacePath
-	if err := cmd.Run(); err != nil {
-		return err
+	files := map[string]string{
+		"README.md":  "# Standard Template\n",
+		".gitignore": ".git/\n",
 	}
-	return os.WriteFile(workspacePath+"/README.md", []byte("# Standard Template\n"), 0o644)
+
+	for name, contents := range files {
+		if err := os.WriteFile(filepath.Join(workspacePath, name), []byte(contents), 0o644); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
