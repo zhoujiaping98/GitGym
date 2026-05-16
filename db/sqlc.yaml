@@ -1,0 +1,13 @@
+version: "2"
+sql:
+  - schema: "db/migrations"
+    queries:
+      - "db/query/users.sql"
+      - "db/query/sessions.sql"
+      - "db/query/commands.sql"
+      - "db/query/templates.sql"
+    engine: "mysql"
+    gen:
+      go:
+        package: "sqlc"
+        out: "services/api/internal/store/sqlc"
