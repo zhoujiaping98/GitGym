@@ -1,0 +1,9 @@
+{
+  "name": "@gitgym/web",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "echo Web app scaffold pending",
+    "test": "echo Web app tests pending"
+  }
+}
