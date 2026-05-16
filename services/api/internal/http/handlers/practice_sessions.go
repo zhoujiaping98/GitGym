@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"gitgym/services/api/internal/domain"
 	"gitgym/services/api/internal/http/middleware"
 	"gitgym/services/api/internal/service"
+	"github.com/go-chi/chi/v5"
 )
 
 type createPracticeSessionRequest struct {
@@ -96,6 +98,38 @@ func GetCurrentPracticeSession(practiceService service.PracticeService) http.Han
 	}
 }
 
+func ResetPracticeSession(practiceService service.PracticeService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authenticatedSession, ok := middleware.AuthenticatedSessionFromContext(r.Context())
+		if !ok || authenticatedSession.UserID == 0 {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": "authenticated session missing from request context",
+			})
+			return
+		}
+
+		sessionID, err := strconv.ParseUint(chi.URLParam(r, "sessionId"), 10, 64)
+		if err != nil || sessionID == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": "invalid session id",
+			})
+			return
+		}
+
+		if err := practiceService.ResetPracticeSession(r.Context(), authenticatedSession.UserID, sessionID); err != nil {
+			writeJSON(w, statusForPracticeSessionMutationError(err), map[string]any{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"session_id": sessionID,
+			"status":     "resetting",
+		})
+	}
+}
+
 func newPracticeSessionResponse(session domain.PracticeSession) practiceSessionResponse {
 	return practiceSessionResponse{
 		ID:             session.ID,
@@ -113,12 +147,18 @@ func newPracticeSessionResponse(session domain.PracticeSession) practiceSessionR
 }
 
 func statusForCreatePracticeSessionError(err error) int {
+	return statusForPracticeSessionMutationError(err)
+}
+
+func statusForPracticeSessionMutationError(err error) int {
 	switch {
 	case errors.Is(err, service.ErrInvalidPracticeSessionInput), errors.Is(err, service.ErrUnknownPracticeTemplate):
 		return http.StatusBadRequest
+	case errors.Is(err, service.ErrPracticeSessionNotFound):
+		return http.StatusNotFound
 	case errors.Is(err, service.ErrPracticeServiceConfiguration):
 		return http.StatusInternalServerError
-	case errors.Is(err, service.ErrRunnerWorkspaceCreation):
+	case errors.Is(err, service.ErrRunnerWorkspaceCreation), errors.Is(err, service.ErrRunnerWorkspaceReset):
 		return http.StatusBadGateway
 	default:
 		return http.StatusInternalServerError

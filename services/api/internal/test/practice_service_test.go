@@ -212,6 +212,84 @@ func TestPracticeServiceFindsSessionByIDForOwningUser(t *testing.T) {
 	}
 }
 
+func TestPracticeServiceResetsOwnedSessionWorkspace(t *testing.T) {
+	t.Parallel()
+
+	store := service.NewInMemoryPracticeSessionStore()
+	runnerClient := &stubRunnerClient{
+		workspace: runner.Workspace{
+			ID:       "ws-reset",
+			Path:     "/tmp/ws-reset",
+			Template: "standard",
+		},
+	}
+	svc := service.NewPracticeService(store, runnerClient, time.Now)
+
+	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 7,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	if err := svc.ResetPracticeSession(context.Background(), 42, created.ID); err != nil {
+		t.Fatalf("reset practice session: %v", err)
+	}
+	if runnerClient.resetWorkspaceCalls != 1 {
+		t.Fatalf("expected runner reset workspace to be called once, got %d", runnerClient.resetWorkspaceCalls)
+	}
+	if runnerClient.lastResetWorkspaceID != "ws-reset" {
+		t.Fatalf("expected reset workspace ID %q, got %q", "ws-reset", runnerClient.lastResetWorkspaceID)
+	}
+}
+
+func TestPracticeServiceClassifiesResetSessionErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejects missing input", func(t *testing.T) {
+		svc := service.NewPracticeService(service.NewInMemoryPracticeSessionStore(), &stubRunnerClient{}, time.Now)
+
+		if err := svc.ResetPracticeSession(context.Background(), 0, 0); !errors.Is(err, service.ErrInvalidPracticeSessionInput) {
+			t.Fatalf("expected invalid input error, got %v", err)
+		}
+	})
+
+	t.Run("reports missing configuration", func(t *testing.T) {
+		svc := service.NewPracticeService(service.NewInMemoryPracticeSessionStore(), nil, time.Now)
+
+		if err := svc.ResetPracticeSession(context.Background(), 42, 99); !errors.Is(err, service.ErrPracticeServiceConfiguration) {
+			t.Fatalf("expected service configuration error, got %v", err)
+		}
+	})
+
+	t.Run("reports runner reset errors", func(t *testing.T) {
+		store := service.NewInMemoryPracticeSessionStore()
+		svc := service.NewPracticeService(store, &stubRunnerClient{
+			workspace: runner.Workspace{
+				ID:       "ws-reset-error",
+				Path:     "/tmp/ws-reset-error",
+				Template: "standard",
+			},
+			resetErr: errors.New("runner unavailable"),
+		}, time.Now)
+
+		created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+			UserID:     42,
+			ScenarioID: 7,
+			TemplateID: 1,
+		})
+		if err != nil {
+			t.Fatalf("create practice session: %v", err)
+		}
+
+		if err := svc.ResetPracticeSession(context.Background(), 42, created.ID); !errors.Is(err, service.ErrRunnerWorkspaceReset) {
+			t.Fatalf("expected runner reset error, got %v", err)
+		}
+	})
+}
+
 type stubPracticeSessionStore struct {
 	createCalls  int
 	lastSession  domain.PracticeSession
@@ -243,8 +321,11 @@ func (s *stubPracticeSessionStore) PracticeSessionByID(_ context.Context, sessio
 type stubRunnerClient struct {
 	createWorkspaceCalls int
 	lastTemplate         string
+	resetWorkspaceCalls  int
+	lastResetWorkspaceID string
 	workspace            runner.Workspace
 	err                  error
+	resetErr             error
 }
 
 func (s *stubRunnerClient) CreateWorkspace(_ context.Context, template string) (runner.Workspace, error) {
@@ -254,4 +335,13 @@ func (s *stubRunnerClient) CreateWorkspace(_ context.Context, template string) (
 		return runner.Workspace{}, s.err
 	}
 	return s.workspace, nil
+}
+
+func (s *stubRunnerClient) ResetWorkspace(_ context.Context, workspaceID string) error {
+	s.resetWorkspaceCalls++
+	s.lastResetWorkspaceID = workspaceID
+	if s.resetErr != nil {
+		return s.resetErr
+	}
+	return nil
 }

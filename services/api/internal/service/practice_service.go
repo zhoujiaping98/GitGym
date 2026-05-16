@@ -18,6 +18,7 @@ var (
 	ErrUnknownPracticeTemplate      = errors.New("unknown practice template")
 	ErrPracticeServiceConfiguration = errors.New("practice service configuration error")
 	ErrRunnerWorkspaceCreation      = errors.New("runner workspace creation failed")
+	ErrRunnerWorkspaceReset         = errors.New("runner workspace reset failed")
 	ErrPracticeSessionNotFound      = errors.New("practice session not found")
 )
 
@@ -42,6 +43,7 @@ type PracticeSessionStore interface {
 type PracticeService interface {
 	ListTemplates(ctx context.Context) []PracticeTemplate
 	CreatePracticeSession(ctx context.Context, input CreatePracticeSessionInput) (domain.PracticeSession, error)
+	ResetPracticeSession(ctx context.Context, userID uint64, sessionID uint64) error
 	CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error)
 	PracticeSessionByID(ctx context.Context, userID uint64, sessionID uint64) (domain.PracticeSession, error)
 }
@@ -135,6 +137,29 @@ func (s *practiceService) CurrentPracticeSession(ctx context.Context, userID uin
 		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionNotFound)
 	}
 	return session, nil
+}
+
+func (s *practiceService) ResetPracticeSession(ctx context.Context, userID uint64, sessionID uint64) error {
+	if userID == 0 || sessionID == 0 {
+		return fmt.Errorf("%w", ErrInvalidPracticeSessionInput)
+	}
+	if s.runner == nil {
+		return fmt.Errorf("%w: runner client is not configured", ErrPracticeServiceConfiguration)
+	}
+
+	session, err := s.PracticeSessionByID(ctx, userID, sessionID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.runner.ResetWorkspace(ctx, session.RunnerRef); err != nil {
+		if errors.Is(err, runner.ErrClientNotConfigured) {
+			return fmt.Errorf("%w: %v", ErrPracticeServiceConfiguration, err)
+		}
+		return fmt.Errorf("%w: %v", ErrRunnerWorkspaceReset, err)
+	}
+
+	return nil
 }
 
 func (s *practiceService) PracticeSessionByID(ctx context.Context, userID uint64, sessionID uint64) (domain.PracticeSession, error) {

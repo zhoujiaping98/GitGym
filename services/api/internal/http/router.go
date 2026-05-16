@@ -31,6 +31,7 @@ func NewRouter(deps ...Dependencies) http.Handler {
 			r.Get("/templates", handlers.ListPracticeTemplates(dependencies.PracticeService))
 			r.Get("/practice-sessions/current", handlers.GetCurrentPracticeSession(dependencies.PracticeService))
 			r.Post("/practice-sessions", handlers.CreatePracticeSession(dependencies.PracticeService))
+			r.Post("/practice-sessions/{sessionId}/reset", handlers.ResetPracticeSession(dependencies.PracticeService))
 			r.Get("/practice-sessions/{sessionId}/terminal", handlers.PracticeTerminalWebsocket(dependencies.PracticeService))
 		})
 	})

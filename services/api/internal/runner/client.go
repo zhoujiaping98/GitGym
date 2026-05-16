@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -20,6 +21,7 @@ type Workspace struct {
 
 type Client interface {
 	CreateWorkspace(ctx context.Context, template string) (Workspace, error)
+	ResetWorkspace(ctx context.Context, workspaceID string) error
 }
 
 type HTTPClient struct {
@@ -76,4 +78,35 @@ func (c *HTTPClient) CreateWorkspace(ctx context.Context, template string) (Work
 	}
 
 	return workspace, nil
+}
+
+func (c *HTTPClient) ResetWorkspace(ctx context.Context, workspaceID string) error {
+	if c.baseURL == "" {
+		return ErrClientNotConfigured
+	}
+	if strings.TrimSpace(workspaceID) == "" {
+		return fmt.Errorf("workspace ID is required")
+	}
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/internal/workspaces/"+url.PathEscape(workspaceID)+"/reset",
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("build reset workspace request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("reset runner workspace: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("runner reset workspace returned status %d", resp.StatusCode)
+	}
+
+	return nil
 }

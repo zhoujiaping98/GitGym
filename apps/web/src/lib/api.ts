@@ -11,6 +11,15 @@ type CurrentSessionPayload = {
   session: SessionResponse;
 };
 
+type CreateSessionInput = {
+  scenarioId: number;
+  templateId: number;
+};
+
+type ResetSessionPayload = {
+  status: string;
+};
+
 type SessionResponse = {
   id: number;
   user_id: number;
@@ -99,4 +108,54 @@ export async function fetchCurrentSession(
   }
 
   return toPracticeSession(payload.data.session);
+}
+
+export async function createPracticeSession(
+  input: CreateSessionInput,
+): Promise<PracticeSession> {
+  const response = await fetch(`${API_BASE}/practice-sessions`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      scenario_id: input.scenarioId,
+      template_id: input.templateId,
+    }),
+  });
+
+  const payload = await readJson<CurrentSessionPayload | { error?: string }>(response);
+  if (!response.ok) {
+    const message =
+      payload.data && "error" in payload.data && payload.data.error
+        ? payload.data.error
+        : "Request failed";
+    throw new ApiError(message, response.status);
+  }
+  if (!payload.data || !("session" in payload.data)) {
+    throw new ApiError("Create session response was malformed", response.status);
+  }
+
+  return toPracticeSession(payload.data.session);
+}
+
+export async function resetPracticeSession(sessionId: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/practice-sessions/${sessionId}/reset`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  const payload = await readJson<ResetSessionPayload | { error?: string }>(response);
+  if (!response.ok) {
+    const message =
+      payload.data && "error" in payload.data && payload.data.error
+        ? payload.data.error
+        : "Request failed";
+    throw new ApiError(message, response.status);
+  }
 }

@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { LoginScreen } from "./components/LoginScreen";
 import { TopBar } from "./components/TopBar";
 import { Workbench } from "./components/Workbench";
 import { useCurrentSession } from "./hooks/useCurrentSession";
 import { useTerminalSession } from "./hooks/useTerminalSession";
+import { createPracticeSession, resetPracticeSession } from "./lib/api";
 
 function templateLabel(templateId: number | null) {
   if (templateId === 1) {
@@ -49,21 +51,63 @@ function AppStateShell({
 export default function App() {
   const currentSession = useCurrentSession();
   const terminalSession = useTerminalSession(currentSession.session);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<"reset" | "new-session" | null>(null);
   const hasActiveSession = currentSession.status === "ready" && currentSession.session;
   const topBarActions = hasActiveSession
     ? [
         {
-          label: "Refresh session",
+          label: "New Session",
           onClick: () => {
-            void currentSession.refresh();
+            const session = currentSession.session;
+            if (!session) {
+              return;
+            }
+
+            setActionError(null);
+            setPendingAction("new-session");
+            void createPracticeSession({
+              scenarioId: session.scenarioId,
+              templateId: session.templateId,
+            })
+              .then(async () => {
+                await currentSession.refresh();
+              })
+              .catch((error: unknown) => {
+                setActionError(
+                  error instanceof Error ? error.message : "Unable to create a new session.",
+                );
+              })
+              .finally(() => {
+                setPendingAction(null);
+              });
           },
+          disabled: pendingAction !== null,
         },
         {
-          label: "Reconnect terminal",
+          label: "Reset",
           onClick: () => {
-            terminalSession.reconnect();
+            const session = currentSession.session;
+            if (!session) {
+              return;
+            }
+
+            setActionError(null);
+            setPendingAction("reset");
+            void resetPracticeSession(session.id)
+              .then(async () => {
+                await currentSession.refresh();
+              })
+              .catch((error: unknown) => {
+                setActionError(
+                  error instanceof Error ? error.message : "Unable to reset this session.",
+                );
+              })
+              .finally(() => {
+                setPendingAction(null);
+              });
           },
-          disabled: terminalSession.status === "connecting",
+          disabled: pendingAction !== null,
         },
       ]
     : [];
@@ -101,6 +145,7 @@ export default function App() {
               The terminal is attached to your active workspace. Repository and
               command history panels stay visible without taking over the page.
             </p>
+            {actionError ? <div className="session-state-detail">{actionError}</div> : null}
           </div>
           <Workbench session={currentSession.session} terminal={terminalSession} />
         </main>

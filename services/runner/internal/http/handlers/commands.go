@@ -64,8 +64,8 @@ func RunCommand(workRoot string) http.HandlerFunc {
 }
 
 func resolveWorkspacePath(workRoot string, workspaceID string) (string, error) {
-	if strings.TrimSpace(workspaceID) == "" {
-		return "", errors.New("workspace ID is required")
+	if err := validateWorkspaceID(workspaceID); err != nil {
+		return "", err
 	}
 
 	rootAbs, err := filepath.Abs(workRoot)
@@ -99,6 +99,19 @@ func resolveWorkspacePath(workRoot string, workspaceID string) (string, error) {
 	}
 
 	return workspaceAbs, nil
+}
+
+func validateWorkspaceID(workspaceID string) error {
+	if strings.TrimSpace(workspaceID) == "" {
+		return errors.New("workspace ID is required")
+	}
+	if workspaceID == "." || workspaceID == ".." {
+		return errors.New("workspace ID is malformed")
+	}
+	if strings.Contains(workspaceID, "/") || strings.Contains(workspaceID, "\\") {
+		return errors.New("workspace ID is malformed")
+	}
+	return nil
 }
 
 func writeWorkspaceError(w http.ResponseWriter, err error) {

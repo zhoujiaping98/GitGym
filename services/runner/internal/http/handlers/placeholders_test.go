@@ -109,6 +109,51 @@ func TestResetWorkspaceReturnsResettingStatusAndRehydratesWorkspace(t *testing.T
 	}
 }
 
+func TestWorkspaceEndpointsRejectMalformedDotWorkspaceIDs(t *testing.T) {
+	router := httpx.NewRouter(t.TempDir())
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		target string
+		body   string
+	}{
+		{
+			name:   "commands rejects current directory",
+			method: http.MethodPost,
+			target: "/internal/workspaces/./commands",
+			body:   `{"command":"git status --short"}`,
+		},
+		{
+			name:   "reset rejects parent directory",
+			method: http.MethodPost,
+			target: "/internal/workspaces/../reset",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.target, strings.NewReader(tc.body))
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			rec := httptest.NewRecorder()
+
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d with body %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+
+			var payload map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("unmarshal error payload: %v", err)
+			}
+			if payload["error"] == "" {
+				t.Fatalf("expected error message for malformed workspace ID, got %v", payload)
+			}
+		})
+	}
+}
+
 type createdWorkspace struct {
 	ID   string `json:"id"`
 	Path string `json:"path"`

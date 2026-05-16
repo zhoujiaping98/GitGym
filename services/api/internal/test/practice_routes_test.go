@@ -37,6 +37,7 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 			{name: "list templates", method: http.MethodGet, target: "/api/v1/templates", status: http.StatusOK},
 			{name: "current session", method: http.MethodGet, target: "/api/v1/practice-sessions/current", status: http.StatusNotFound},
 			{name: "create session", method: http.MethodPost, target: "/api/v1/practice-sessions", body: []byte(`{"scenario_id":7,"template_id":1}`), status: http.StatusCreated},
+			{name: "reset session", method: http.MethodPost, target: "/api/v1/practice-sessions/123/reset", status: http.StatusAccepted},
 			{name: "terminal route", method: http.MethodGet, target: "/api/v1/practice-sessions/123/terminal", status: http.StatusNotFound},
 		}
 
@@ -72,6 +73,17 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 
 	t.Run("current session remains protected without cookie", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/current", nil)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rec.Code)
+		}
+	})
+
+	t.Run("reset session remains protected without cookie", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions/123/reset", nil)
 		rec := httptest.NewRecorder()
 
 		router.ServeHTTP(rec, req)
@@ -317,7 +329,7 @@ func TestCreatePracticeSessionMapsErrors(t *testing.T) {
 		{name: "bad input", err: service.ErrInvalidPracticeSessionInput, status: http.StatusBadRequest},
 		{name: "unknown template", err: service.ErrUnknownPracticeTemplate, status: http.StatusBadRequest},
 		{name: "service configuration", err: service.ErrPracticeServiceConfiguration, status: http.StatusInternalServerError},
-		{name: "runner failure", err: service.ErrRunnerWorkspaceCreation, status: http.StatusBadGateway},
+		{name: "runner failure", err: service.ErrRunnerWorkspaceReset, status: http.StatusBadGateway},
 		{name: "wrapped runner failure", err: errors.Join(service.ErrRunnerWorkspaceCreation, errors.New("dial tcp timeout")), status: http.StatusBadGateway},
 	}
 
@@ -345,11 +357,76 @@ func TestCreatePracticeSessionMapsErrors(t *testing.T) {
 	}
 }
 
+func TestResetPracticeSessionUsesAuthenticatedUser(t *testing.T) {
+	t.Parallel()
+
+	recordingService := &stubPracticeService{}
+	router := httpx.NewRouter(httpx.Dependencies{
+		PracticeService: recordingService,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions/321/reset", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "uid:42:session-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d with body %s", rec.Code, rec.Body.String())
+	}
+	if recordingService.lastResetUserID != 1 {
+		t.Fatalf("expected handler to use placeholder authenticated user ID 1, got %d", recordingService.lastResetUserID)
+	}
+	if recordingService.lastResetSessionID != 321 {
+		t.Fatalf("expected session ID 321, got %d", recordingService.lastResetSessionID)
+	}
+}
+
+func TestResetPracticeSessionMapsErrors(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{name: "bad input", err: service.ErrInvalidPracticeSessionInput, status: http.StatusBadRequest},
+		{name: "not found", err: service.ErrPracticeSessionNotFound, status: http.StatusNotFound},
+		{name: "service configuration", err: service.ErrPracticeServiceConfiguration, status: http.StatusInternalServerError},
+		{name: "runner failure", err: service.ErrRunnerWorkspaceCreation, status: http.StatusBadGateway},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			router := httpx.NewRouter(httpx.Dependencies{
+				PracticeService: &stubPracticeService{
+					resetPracticeSessionFunc: func(context.Context, uint64, uint64) error {
+						return tc.err
+					},
+				},
+			})
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions/123/reset", nil)
+			req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "123"})
+			rec := httptest.NewRecorder()
+
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != tc.status {
+				t.Fatalf("expected %d, got %d with body %s", tc.status, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 type stubPracticeService struct {
 	createPracticeSessionFunc  func(context.Context, service.CreatePracticeSessionInput) (domain.PracticeSession, error)
+	resetPracticeSessionFunc   func(context.Context, uint64, uint64) error
 	currentPracticeSessionFunc func(context.Context, uint64) (domain.PracticeSession, error)
 	practiceSessionByIDFunc    func(context.Context, uint64, uint64) (domain.PracticeSession, error)
 	lastCreateInput            service.CreatePracticeSessionInput
+	lastResetUserID            uint64
+	lastResetSessionID         uint64
 }
 
 func (s *stubPracticeService) ListTemplates(context.Context) []service.PracticeTemplate {
@@ -362,6 +439,15 @@ func (s *stubPracticeService) CreatePracticeSession(ctx context.Context, input s
 		return s.createPracticeSessionFunc(ctx, input)
 	}
 	return domain.PracticeSession{ID: 1, Status: "active"}, nil
+}
+
+func (s *stubPracticeService) ResetPracticeSession(ctx context.Context, userID uint64, sessionID uint64) error {
+	s.lastResetUserID = userID
+	s.lastResetSessionID = sessionID
+	if s.resetPracticeSessionFunc != nil {
+		return s.resetPracticeSessionFunc(ctx, userID, sessionID)
+	}
+	return nil
 }
 
 func (s *stubPracticeService) CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error) {

@@ -1,9 +1,12 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
+import * as api from "../lib/api";
 
 const mockUseCurrentSession = vi.fn();
 const mockUseTerminalSession = vi.fn();
+const mockCreatePracticeSession = vi.spyOn(api, "createPracticeSession");
+const mockResetPracticeSession = vi.spyOn(api, "resetPracticeSession");
 
 vi.mock("../hooks/useCurrentSession", () => ({
   useCurrentSession: () => mockUseCurrentSession(),
@@ -45,6 +48,11 @@ beforeEach(() => {
     error: null,
     reconnect: vi.fn(),
   });
+
+  mockCreatePracticeSession.mockReset();
+  mockCreatePracticeSession.mockResolvedValue(activeSession);
+  mockResetPracticeSession.mockReset();
+  mockResetPracticeSession.mockResolvedValue(undefined);
 });
 
 describe("App", () => {
@@ -64,7 +72,7 @@ describe("App", () => {
     expect(screen.getByText("Template: Standard")).toBeInTheDocument();
     expect(screen.getByText("Signed out")).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Refresh session" }),
+      screen.queryByRole("button", { name: "New Session" }),
     ).not.toBeInTheDocument();
   });
 
@@ -106,7 +114,7 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders the live workbench when there is an active session", () => {
+  it("renders the live workbench when there is an active session", async () => {
     const refresh = vi.fn();
     const reconnect = vi.fn();
 
@@ -150,10 +158,22 @@ describe("App", () => {
     expect(screen.getByText("runner-42")).toBeInTheDocument();
     expect(screen.getByText("git status")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Refresh session" }));
-    fireEvent.click(screen.getByRole("button", { name: "Reconnect terminal" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
 
-    expect(refresh).toHaveBeenCalledTimes(1);
-    expect(reconnect).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(mockCreatePracticeSession).toHaveBeenCalledWith({
+        scenarioId: 9,
+        templateId: 1,
+      });
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => {
+      expect(mockResetPracticeSession).toHaveBeenCalledWith(42);
+      expect(refresh).toHaveBeenCalledTimes(2);
+    });
+    expect(reconnect).not.toHaveBeenCalled();
   });
 });
