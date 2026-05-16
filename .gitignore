@@ -5,6 +5,7 @@ dist/
 .env.local
 .superpowers/
 .cache/
+.gocache/
 coverage/
 playwright-report/
 test-results/
