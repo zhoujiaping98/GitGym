@@ -26,7 +26,7 @@ func CreateWorkspace(workRoot string) http.HandlerFunc {
 		_ = json.NewEncoder(w).Encode(createWorkspaceResponse{
 			ID:       workspace.ID,
 			Path:     workspace.Path,
-			Template: "standard",
+			Template: workspace.Template,
 		})
 	}
 }

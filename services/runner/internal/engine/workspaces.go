@@ -1,28 +1,32 @@
 package engine
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 type Workspace struct {
-	ID   string
-	Path string
+	ID       string
+	Path     string
+	Template string
 }
 
 func CreateWorkspace(root string) (Workspace, error) {
-	id := fmt.Sprintf("ws-%d", time.Now().UnixNano())
-	path := filepath.Join(root, id)
-	if err := os.MkdirAll(path, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		return Workspace{}, err
 	}
+
+	path, err := os.MkdirTemp(root, "ws-")
+	if err != nil {
+		return Workspace{}, err
+	}
+
+	id := filepath.Base(path)
 
 	if err := InitStandardTemplate(path); err != nil {
 		_ = os.RemoveAll(path)
 		return Workspace{}, err
 	}
 
-	return Workspace{ID: id, Path: path}, nil
+	return Workspace{ID: id, Path: path, Template: "standard"}, nil
 }
