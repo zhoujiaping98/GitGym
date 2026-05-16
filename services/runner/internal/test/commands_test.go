@@ -37,7 +37,7 @@ func createGitWorkspace(t *testing.T) engine.Workspace {
 	return workspace
 }
 
-func TestRunGitStatusAndCaptureSnapshot(t *testing.T) {
+func TestRunGitStatusCapturesSnapshotsInLifecycleEvents(t *testing.T) {
 	workspace := createGitWorkspace(t)
 
 	recorder := engine.NewEventRecorder()
@@ -64,25 +64,37 @@ func TestRunGitStatusAndCaptureSnapshot(t *testing.T) {
 	if got := events[0].Payload["raw"]; got != "git status --short" {
 		t.Fatalf("expected raw command payload, got %#v", got)
 	}
+	preSnapshot, ok := events[0].Payload["pre_snapshot"].(engine.Snapshot)
+	if !ok {
+		t.Fatalf("expected pre_snapshot payload, got %#v", events[0].Payload["pre_snapshot"])
+	}
+	if preSnapshot.HeadCommit == "" {
+		t.Fatal("expected pre-run head commit to be populated")
+	}
+	if preSnapshot.BranchName != "main" {
+		t.Fatalf("expected pre-run branch main, got %q", preSnapshot.BranchName)
+	}
+	if len(preSnapshot.StatusSummary) != 0 {
+		t.Fatalf("expected empty pre-run status summary, got %v", preSnapshot.StatusSummary)
+	}
 	if events[1].Type != "command_finished" {
 		t.Fatalf("expected second event type command_finished, got %q", events[1].Type)
 	}
 	if got := events[1].Payload["exit_code"]; got != 0 {
 		t.Fatalf("expected exit code payload 0, got %#v", got)
 	}
-
-	snapshot, err := engine.CaptureSnapshot(workspace.Path)
-	if err != nil {
-		t.Fatalf("capture snapshot: %v", err)
+	postSnapshot, ok := events[1].Payload["post_snapshot"].(engine.Snapshot)
+	if !ok {
+		t.Fatalf("expected post_snapshot payload, got %#v", events[1].Payload["post_snapshot"])
 	}
-	if snapshot.HeadCommit == "" {
-		t.Fatal("expected head commit to be populated")
+	if postSnapshot.HeadCommit == "" {
+		t.Fatal("expected post-run head commit to be populated")
 	}
-	if snapshot.BranchName != "main" {
-		t.Fatalf("expected branch main, got %q", snapshot.BranchName)
+	if postSnapshot.BranchName != "main" {
+		t.Fatalf("expected post-run branch main, got %q", postSnapshot.BranchName)
 	}
-	if len(snapshot.StatusSummary) != 0 {
-		t.Fatalf("expected empty status summary, got %v", snapshot.StatusSummary)
+	if len(postSnapshot.StatusSummary) != 0 {
+		t.Fatalf("expected empty post-run status summary, got %v", postSnapshot.StatusSummary)
 	}
 }
 
@@ -107,5 +119,13 @@ func TestRunCommandSupportsQuotedArguments(t *testing.T) {
 	}
 	if result.Stdout != "Quoted Name\n" {
 		t.Fatalf("expected quoted value to round-trip, got %q", result.Stdout)
+	}
+}
+
+func TestRunCommandRejectsNonGitExecutables(t *testing.T) {
+	workspace := createGitWorkspace(t)
+
+	if _, err := engine.RunCommand(workspace.Path, "go version"); err == nil {
+		t.Fatal("expected error for non-git command")
 	}
 }

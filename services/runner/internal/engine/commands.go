@@ -24,31 +24,51 @@ func RunCommand(workspacePath string, raw string) (CommandResult, error) {
 	if err != nil {
 		return CommandResult{}, err
 	}
+	if err := validateCommandPolicy(parts); err != nil {
+		return CommandResult{}, err
+	}
 
 	return runCommand(workspacePath, parts)
 }
 
 func RunCommandWithEvents(workspacePath string, raw string, workspaceID string, recorder *EventRecorder) (CommandResult, error) {
-	if recorder != nil {
-		recorder.Record("command_started", workspaceID, map[string]any{
-			"raw": raw,
-		})
+	parts, err := parseCommand(raw)
+	if err != nil {
+		recordCommandStarted(recorder, workspaceID, raw, nil)
+		recordCommandFinished(recorder, workspaceID, raw, CommandResult{}, err, nil)
+		return CommandResult{}, err
+	}
+	if err := validateCommandPolicy(parts); err != nil {
+		recordCommandStarted(recorder, workspaceID, raw, nil)
+		recordCommandFinished(recorder, workspaceID, raw, CommandResult{}, err, nil)
+		return CommandResult{}, err
 	}
 
-	result, err := RunCommand(workspacePath, raw)
+	preSnapshot, err := CaptureSnapshot(workspacePath)
+	if err != nil {
+		err = fmt.Errorf("capture pre-run snapshot: %w", err)
+		recordCommandStarted(recorder, workspaceID, raw, nil)
+		recordCommandFinished(recorder, workspaceID, raw, CommandResult{}, err, nil)
+		return CommandResult{}, err
+	}
 
-	if recorder != nil {
-		payload := map[string]any{
-			"raw": raw,
-		}
-		if err == nil {
-			payload["exit_code"] = result.ExitCode
-			payload["duration_ms"] = result.DurationMS
+	recordCommandStarted(recorder, workspaceID, raw, &preSnapshot)
+
+	result, err := runCommand(workspacePath, parts)
+	postSnapshot, snapshotErr := CaptureSnapshot(workspacePath)
+	var postSnapshotPayload *Snapshot
+	if snapshotErr != nil {
+		snapshotErr = fmt.Errorf("capture post-run snapshot: %w", snapshotErr)
+		if err != nil {
+			err = errors.Join(err, snapshotErr)
 		} else {
-			payload["error"] = err.Error()
+			err = snapshotErr
 		}
-		recorder.Record("command_finished", workspaceID, payload)
+	} else {
+		postSnapshotPayload = &postSnapshot
 	}
+
+	recordCommandFinished(recorder, workspaceID, raw, result, err, postSnapshotPayload)
 
 	return result, err
 }
@@ -103,6 +123,50 @@ func commandTimeout() time.Duration {
 	}
 
 	return timeout
+}
+
+func validateCommandPolicy(parts []string) error {
+	if len(parts) == 0 {
+		return errors.New("command is required")
+	}
+	if parts[0] != "git" {
+		return fmt.Errorf("only git commands are allowed: %q", parts[0])
+	}
+	return nil
+}
+
+func recordCommandStarted(recorder *EventRecorder, workspaceID string, raw string, preSnapshot *Snapshot) {
+	if recorder == nil {
+		return
+	}
+
+	payload := map[string]any{
+		"raw": raw,
+	}
+	if preSnapshot != nil {
+		payload["pre_snapshot"] = *preSnapshot
+	}
+	recorder.Record("command_started", workspaceID, payload)
+}
+
+func recordCommandFinished(recorder *EventRecorder, workspaceID string, raw string, result CommandResult, err error, postSnapshot *Snapshot) {
+	if recorder == nil {
+		return
+	}
+
+	payload := map[string]any{
+		"raw": raw,
+	}
+	if postSnapshot != nil {
+		payload["post_snapshot"] = *postSnapshot
+	}
+	if err == nil {
+		payload["exit_code"] = result.ExitCode
+		payload["duration_ms"] = result.DurationMS
+	} else {
+		payload["error"] = err.Error()
+	}
+	recorder.Record("command_finished", workspaceID, payload)
 }
 
 func parseCommand(raw string) ([]string, error) {

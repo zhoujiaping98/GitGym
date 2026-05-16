@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"errors"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -62,7 +60,7 @@ func TestParseCommandHandlesEscapedQuotesInsideQuotedArgument(t *testing.T) {
 func TestRunCommandReturnsTimeoutError(t *testing.T) {
 	t.Setenv("GITGYM_RUNNER_COMMAND_TIMEOUT", "10ms")
 
-	result, err := RunCommand(t.TempDir(), `go run ./internal/engine/testdata/sleepmain`)
+	result, err := RunCommand(t.TempDir(), "git daemon")
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -71,9 +69,6 @@ func TestRunCommandReturnsTimeoutError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("expected timeout error, got %v", err)
-	}
-	if !errors.Is(err, exec.ErrNotFound) && !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("expected timeout-related error, got %v", err)
 	}
 }
 
@@ -96,5 +91,34 @@ func TestCommandTimeoutOverrideUsesEnvDuration(t *testing.T) {
 
 	if got := commandTimeout(); got != 25*time.Millisecond {
 		t.Fatalf("expected override timeout 25ms, got %s", got)
+	}
+}
+
+func TestRunCommandWithEventsRejectsNonGitCommand(t *testing.T) {
+	recorder := NewEventRecorder()
+
+	result, err := RunCommandWithEvents(t.TempDir(), "go version", "ws-1", recorder)
+	if err == nil {
+		t.Fatal("expected policy error")
+	}
+	if result != (CommandResult{}) {
+		t.Fatalf("expected zero result on policy rejection, got %#v", result)
+	}
+	if !strings.Contains(err.Error(), "git") {
+		t.Fatalf("expected git-only policy error, got %v", err)
+	}
+
+	events := recorder.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	if events[0].Type != "command_started" {
+		t.Fatalf("expected command_started event, got %q", events[0].Type)
+	}
+	if events[1].Type != "command_finished" {
+		t.Fatalf("expected command_finished event, got %q", events[1].Type)
+	}
+	if got := events[1].Payload["error"]; got == nil || !strings.Contains(got.(string), "git") {
+		t.Fatalf("expected git-only policy error in payload, got %#v", got)
 	}
 }
