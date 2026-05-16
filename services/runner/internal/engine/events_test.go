@@ -51,3 +51,25 @@ func TestEventRecorderDeepCopiesNestedJSONLikePayloads(t *testing.T) {
 		t.Fatalf("expected nested payload to remain unchanged, got %#v", got)
 	}
 }
+
+func TestEventRecorderDeepCopiesSnapshotPayloadsOnEvents(t *testing.T) {
+	recorder := NewEventRecorder()
+	recorder.Record("command_started", "ws-1", map[string]any{
+		"pre_snapshot": Snapshot{
+			HeadCommit:    "abc123",
+			BranchName:    "main",
+			StatusSummary: []string{"M events.go"},
+		},
+	})
+
+	events := recorder.Events()
+	snapshot := events[0].Payload["pre_snapshot"].(Snapshot)
+	snapshot.StatusSummary[0] = "mutated"
+	events[0].Payload["pre_snapshot"] = snapshot
+
+	fresh := recorder.Events()
+	got := fresh[0].Payload["pre_snapshot"].(Snapshot).StatusSummary[0]
+	if got != "M events.go" {
+		t.Fatalf("expected snapshot payload to remain unchanged, got %#v", got)
+	}
+}

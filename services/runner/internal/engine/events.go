@@ -77,6 +77,12 @@ func copyPayloadValue(value any) any {
 			cloned[i] = copyPayloadValue(item)
 		}
 		return cloned
+	case Snapshot:
+		cloned := typed
+		if typed.StatusSummary != nil {
+			cloned.StatusSummary = append([]string(nil), typed.StatusSummary...)
+		}
+		return cloned
 	default:
 		return value
 	}
