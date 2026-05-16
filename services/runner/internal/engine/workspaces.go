@@ -27,6 +27,10 @@ func CreateWorkspace(root string) (Workspace, error) {
 		_ = os.RemoveAll(path)
 		return Workspace{}, err
 	}
+	if err := InitWorkspaceRepository(path); err != nil {
+		_ = os.RemoveAll(path)
+		return Workspace{}, err
+	}
 
 	return Workspace{ID: id, Path: path, Template: "standard"}, nil
 }

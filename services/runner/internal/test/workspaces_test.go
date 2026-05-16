@@ -2,7 +2,9 @@ package test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gitgym/services/runner/internal/config"
@@ -55,8 +57,26 @@ func TestCreateWorkspaceHydratesStandardTemplate(t *testing.T) {
 		t.Fatalf("read workspace dir: %v", err)
 	}
 
-	if len(entries) != 2 {
-		t.Fatalf("expected 2 template files, found %d", len(entries))
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 workspace entries including .git, found %d", len(entries))
+	}
+
+	if _, err := os.Stat(filepath.Join(workspace.Path, ".git")); err != nil {
+		t.Fatalf("expected initialized git repository: %v", err)
+	}
+
+	assertGitOutput(t, workspace.Path, []string{"branch", "--show-current"}, "main\n")
+	if got := strings.TrimSpace(runGit(t, workspace.Path, "config", "user.name")); got != "GitGym Test" {
+		t.Fatalf("expected git user.name GitGym Test, got %q", got)
+	}
+	if got := strings.TrimSpace(runGit(t, workspace.Path, "config", "user.email")); got != "test@gitgym.dev" {
+		t.Fatalf("expected git user.email test@gitgym.dev, got %q", got)
+	}
+	if got := strings.TrimSpace(runGit(t, workspace.Path, "log", "--format=%s", "-1")); got != "Initial commit" {
+		t.Fatalf("expected initial commit message, got %q", got)
+	}
+	if got := strings.TrimSpace(runGit(t, workspace.Path, "status", "--short")); got != "" {
+		t.Fatalf("expected clean git status, got %q", got)
 	}
 }
 
@@ -79,4 +99,32 @@ func TestLoadConfigNormalizesWorkRootToAbsolutePath(t *testing.T) {
 	if !filepath.IsAbs(cfg.WorkRoot) {
 		t.Fatalf("expected absolute work root, got %q", cfg.WorkRoot)
 	}
+}
+
+func assertGitOutput(t *testing.T, dir string, args []string, want string) {
+	t.Helper()
+
+	if got := runGit(t, dir, args...); got != want {
+		t.Fatalf("expected git %s output %q, got %q", strings.Join(args, " "), want, got)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+
+	home := t.TempDir()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(
+		os.Environ(),
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"HOME="+home,
+		"USERPROFILE="+home,
+		"XDG_CONFIG_HOME="+home,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, string(output))
+	}
+	return string(output)
 }

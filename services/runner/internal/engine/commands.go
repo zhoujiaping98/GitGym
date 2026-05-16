@@ -34,43 +34,44 @@ func RunCommand(workspacePath string, raw string) (CommandResult, error) {
 func RunCommandWithEvents(workspacePath string, raw string, workspaceID string, recorder *EventRecorder) (CommandResult, error) {
 	parts, err := parseCommand(raw)
 	if err != nil {
-		recordCommandStarted(recorder, workspaceID, raw, nil)
-		recordCommandFinished(recorder, workspaceID, raw, CommandResult{}, err, nil)
+		recordCommandFinished(recorder, workspaceID, raw, CommandResult{}, false, err, nil, nil)
 		return CommandResult{}, err
 	}
 	if err := validateCommandPolicy(parts); err != nil {
-		recordCommandStarted(recorder, workspaceID, raw, nil)
-		recordCommandFinished(recorder, workspaceID, raw, CommandResult{}, err, nil)
+		recordCommandFinished(recorder, workspaceID, raw, CommandResult{}, false, err, nil, nil)
 		return CommandResult{}, err
 	}
 
 	preSnapshot, err := CaptureSnapshot(workspacePath)
 	if err != nil {
 		err = fmt.Errorf("capture pre-run snapshot: %w", err)
-		recordCommandStarted(recorder, workspaceID, raw, nil)
-		recordCommandFinished(recorder, workspaceID, raw, CommandResult{}, err, nil)
+		recordCommandFinished(recorder, workspaceID, raw, CommandResult{}, false, err, nil, nil)
 		return CommandResult{}, err
 	}
 
 	recordCommandStarted(recorder, workspaceID, raw, &preSnapshot)
 
-	result, err := runCommand(workspacePath, parts)
+	result, commandErr := runCommand(workspacePath, parts)
 	postSnapshot, snapshotErr := CaptureSnapshot(workspacePath)
 	var postSnapshotPayload *Snapshot
 	if snapshotErr != nil {
 		snapshotErr = fmt.Errorf("capture post-run snapshot: %w", snapshotErr)
-		if err != nil {
-			err = errors.Join(err, snapshotErr)
-		} else {
-			err = snapshotErr
-		}
 	} else {
 		postSnapshotPayload = &postSnapshot
 	}
 
-	recordCommandFinished(recorder, workspaceID, raw, result, err, postSnapshotPayload)
+	recordCommandFinished(recorder, workspaceID, raw, result, true, commandErr, snapshotErr, postSnapshotPayload)
 
-	return result, err
+	if commandErr != nil && snapshotErr != nil {
+		return result, errors.Join(commandErr, snapshotErr)
+	}
+	if commandErr != nil {
+		return result, commandErr
+	}
+	if snapshotErr != nil {
+		return result, snapshotErr
+	}
+	return result, nil
 }
 
 func runCommand(workspacePath string, parts []string) (CommandResult, error) {
@@ -149,7 +150,7 @@ func recordCommandStarted(recorder *EventRecorder, workspaceID string, raw strin
 	recorder.Record("command_started", workspaceID, payload)
 }
 
-func recordCommandFinished(recorder *EventRecorder, workspaceID string, raw string, result CommandResult, err error, postSnapshot *Snapshot) {
+func recordCommandFinished(recorder *EventRecorder, workspaceID string, raw string, result CommandResult, launched bool, commandErr error, snapshotErr error, postSnapshot *Snapshot) {
 	if recorder == nil {
 		return
 	}
@@ -157,26 +158,29 @@ func recordCommandFinished(recorder *EventRecorder, workspaceID string, raw stri
 	payload := map[string]any{
 		"raw": raw,
 	}
+	if launched {
+		payload["exit_code"] = result.ExitCode
+		payload["duration_ms"] = result.DurationMS
+	}
 	if postSnapshot != nil {
 		payload["post_snapshot"] = *postSnapshot
 	}
-	if err == nil {
-		payload["exit_code"] = result.ExitCode
-		payload["duration_ms"] = result.DurationMS
-	} else {
-		payload["error"] = err.Error()
+	if commandErr != nil {
+		payload["error"] = commandErr.Error()
+	}
+	if snapshotErr != nil {
+		payload["post_snapshot_error"] = snapshotErr.Error()
 	}
 	recorder.Record("command_finished", workspaceID, payload)
 }
 
 func parseCommand(raw string) ([]string, error) {
 	var (
-		parts         []string
-		current       []rune
-		inQuote       rune
-		escaping      bool
-		sawToken      bool
-		tokenStarted  bool
+		parts        []string
+		current      []rune
+		inQuote      rune
+		sawToken     bool
+		tokenStarted bool
 	)
 
 	flush := func() {
@@ -188,23 +192,16 @@ func parseCommand(raw string) ([]string, error) {
 		tokenStarted = false
 	}
 
-	for _, r := range raw {
+	runes := []rune(raw)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
 		switch {
-		case escaping:
-			if r == inQuote || r == '\\' {
-				current[len(current)-1] = r
-			} else {
-				current = append(current, r)
-			}
-			sawToken = true
-			tokenStarted = true
-			escaping = false
 		case inQuote != 0:
-			if r == '\\' {
-				current = append(current, r)
+			if r == '\\' && i+1 < len(runes) && (runes[i+1] == inQuote || runes[i+1] == '\\') {
+				current = append(current, runes[i+1])
 				sawToken = true
 				tokenStarted = true
-				escaping = true
+				i++
 			} else if r == inQuote {
 				inQuote = 0
 			} else {
