@@ -7,6 +7,7 @@ const mockUseCurrentSession = vi.fn();
 const mockUseTerminalSession = vi.fn();
 const mockCreatePracticeSession = vi.spyOn(api, "createPracticeSession");
 const mockResetPracticeSession = vi.spyOn(api, "resetPracticeSession");
+const mockLogout = vi.spyOn(api, "logout");
 
 vi.mock("../hooks/useCurrentSession", () => ({
   useCurrentSession: () => mockUseCurrentSession(),
@@ -62,6 +63,7 @@ beforeEach(() => {
   mockUseCurrentSession.mockReturnValue({
     status: "ready",
     session: null,
+    absenceReason: "unauthenticated",
     error: null,
     refresh: vi.fn().mockResolvedValue(null),
   });
@@ -79,6 +81,8 @@ beforeEach(() => {
   mockCreatePracticeSession.mockResolvedValue(nextSession);
   mockResetPracticeSession.mockReset();
   mockResetPracticeSession.mockResolvedValue(undefined);
+  mockLogout.mockReset();
+  mockLogout.mockResolvedValue(undefined);
 });
 
 describe("App", () => {
@@ -102,10 +106,73 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("automatically creates a first session for authenticated users without a current session", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: null,
+      absenceReason: "missing",
+      error: null,
+      refresh: vi.fn().mockResolvedValue(nextSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue({
+      status: "idle",
+      transcript: [],
+      history: [],
+      terminalUrl: null,
+      error: null,
+      reconnect: vi.fn(),
+    });
+
+    render(<App />);
+
+    expect(screen.getByText("Signed in")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Preparing your workspace" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Continue with GitHub" }),
+    ).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(mockCreatePracticeSession).toHaveBeenCalledWith({
+        scenarioId: 9,
+        templateId: 1,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Session live")).toBeInTheDocument();
+      expect(screen.getByText("runner-43")).toBeInTheDocument();
+    });
+  });
+
+  it("shows a manual recovery state when automatic first-session creation fails", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: null,
+      absenceReason: "missing",
+      error: null,
+      refresh: vi.fn().mockResolvedValue(null),
+    });
+
+    mockCreatePracticeSession.mockRejectedValueOnce(new Error("create failed"));
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Create your first practice session" })).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("create failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
+  });
+
   it("renders a loading shell while checking for a current session", () => {
     mockUseCurrentSession.mockReturnValue({
       status: "loading",
       session: null,
+      absenceReason: null,
       error: null,
       refresh: vi.fn().mockResolvedValue(null),
     });
@@ -127,6 +194,7 @@ describe("App", () => {
     mockUseCurrentSession.mockReturnValue({
       status: "error",
       session: null,
+      absenceReason: null,
       error: "api offline",
       refresh,
     });
@@ -151,6 +219,7 @@ describe("App", () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
+      absenceReason: null,
       error: null,
       refresh,
     });
@@ -212,12 +281,54 @@ describe("App", () => {
     expect(reconnect).not.toHaveBeenCalled();
   });
 
+  it("shows a logout action for authenticated users and returns to the login screen after logout", async () => {
+    const refresh = vi
+      .fn()
+      .mockResolvedValueOnce(activeSession)
+      .mockResolvedValueOnce(null);
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh,
+    });
+
+    mockUseTerminalSession.mockReturnValue({
+      status: "ready",
+      transcript: [],
+      history: [],
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      error: null,
+      reconnect: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Logout" }));
+
+    await waitFor(() => {
+      expect(mockLogout).toHaveBeenCalledTimes(1);
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("link", { name: "Continue with GitHub" }),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByText("Signed out")).toBeInTheDocument();
+    expect(screen.queryByText("runner-42")).not.toBeInTheDocument();
+  });
+
   it("renders a reconnect action for unavailable terminals without resetting the session", () => {
     const reconnect = vi.fn();
 
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
+      absenceReason: null,
       error: null,
       refresh: vi.fn().mockResolvedValue(activeSession),
     });
@@ -245,6 +356,7 @@ describe("App", () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
+      absenceReason: null,
       error: null,
       refresh,
     });
@@ -282,6 +394,7 @@ describe("App", () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
+      absenceReason: null,
       error: null,
       refresh,
     });
@@ -316,6 +429,7 @@ describe("App", () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
+      absenceReason: null,
       error: null,
       refresh: vi.fn().mockResolvedValue(activeSession),
     });
@@ -346,6 +460,7 @@ describe("App", () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
+      absenceReason: null,
       error: null,
       refresh,
     });

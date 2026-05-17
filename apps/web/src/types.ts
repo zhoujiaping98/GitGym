@@ -1,3 +1,5 @@
+export type SessionAbsenceReason = "unauthenticated" | "missing";
+
 export type PracticeSession = {
   id: number;
   userId: number;
@@ -15,6 +17,7 @@ export type PracticeSession = {
 export type CurrentSessionState = {
   status: "loading" | "ready" | "error";
   session: PracticeSession | null;
+  absenceReason: SessionAbsenceReason | null;
   error: string | null;
   refresh: () => Promise<PracticeSession | null>;
 };

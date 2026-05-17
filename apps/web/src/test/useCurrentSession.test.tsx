@@ -26,7 +26,10 @@ beforeEach(() => {
 describe("useCurrentSession", () => {
   it("keeps the last known session mounted when refresh fails", async () => {
     mockFetchCurrentSession
-      .mockResolvedValueOnce(activeSession)
+      .mockResolvedValueOnce({
+        session: activeSession,
+        absenceReason: null,
+      })
       .mockRejectedValueOnce(new Error("api offline"));
 
     const { result } = renderHook(() => useCurrentSession());
@@ -45,6 +48,7 @@ describe("useCurrentSession", () => {
     });
 
     expect(result.current.session).toEqual(activeSession);
+    expect(result.current.absenceReason).toBeNull();
     expect(result.current.error).toBe("api offline");
   });
 });

@@ -1,4 +1,4 @@
-import type { PracticeSession } from "../types";
+import type { PracticeSession, SessionAbsenceReason } from "../types";
 
 const API_BASE = "/api/v1";
 
@@ -18,6 +18,11 @@ type CreateSessionInput = {
 
 type ResetSessionPayload = {
   status: string;
+};
+
+type CurrentSessionLookup = {
+  session: PracticeSession | null;
+  absenceReason: SessionAbsenceReason | null;
 };
 
 type SessionResponse = {
@@ -78,7 +83,7 @@ function toPracticeSession(session: SessionResponse): PracticeSession {
 
 export async function fetchCurrentSession(
   signal?: AbortSignal,
-): Promise<PracticeSession | null> {
+): Promise<CurrentSessionLookup> {
   const response = await fetch(`${API_BASE}/practice-sessions/current`, {
     credentials: "include",
     headers: {
@@ -87,8 +92,18 @@ export async function fetchCurrentSession(
     signal,
   });
 
-  if (response.status === 401 || response.status === 404) {
-    return null;
+  if (response.status === 401) {
+    return {
+      session: null,
+      absenceReason: "unauthenticated",
+    };
+  }
+
+  if (response.status === 404) {
+    return {
+      session: null,
+      absenceReason: "missing",
+    };
   }
 
   const payload = await readJson<CurrentSessionPayload | { error?: string }>(
@@ -107,7 +122,10 @@ export async function fetchCurrentSession(
     throw new ApiError("Current session response was malformed", response.status);
   }
 
-  return toPracticeSession(payload.data.session);
+  return {
+    session: toPracticeSession(payload.data.session),
+    absenceReason: null,
+  };
 }
 
 export async function createPracticeSession(
@@ -151,6 +169,22 @@ export async function resetPracticeSession(sessionId: number): Promise<void> {
   });
 
   const payload = await readJson<ResetSessionPayload | { error?: string }>(response);
+  if (!response.ok) {
+    const message =
+      payload.data && "error" in payload.data && payload.data.error
+        ? payload.data.error
+        : "Request failed";
+    throw new ApiError(message, response.status);
+  }
+}
+
+export async function logout(): Promise<void> {
+  const response = await fetch(`${API_BASE}/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+  });
+
+  const payload = await readJson<{ error?: string }>(response);
   if (!response.ok) {
     const message =
       payload.data && "error" in payload.data && payload.data.error

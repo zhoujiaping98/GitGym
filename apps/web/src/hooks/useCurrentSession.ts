@@ -1,10 +1,15 @@
 import { useEffect, useState } from "react";
 import { fetchCurrentSession } from "../lib/api";
-import type { CurrentSessionState, PracticeSession } from "../types";
+import type {
+  CurrentSessionState,
+  PracticeSession,
+  SessionAbsenceReason,
+} from "../types";
 
 export function useCurrentSession(): CurrentSessionState {
   const [status, setStatus] = useState<CurrentSessionState["status"]>("loading");
   const [session, setSession] = useState<PracticeSession | null>(null);
+  const [absenceReason, setAbsenceReason] = useState<SessionAbsenceReason | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function load(
@@ -15,9 +20,10 @@ export function useCurrentSession(): CurrentSessionState {
 
     try {
       const currentSession = await fetchCurrentSession(signal);
-      setSession(currentSession);
+      setSession(currentSession.session);
+      setAbsenceReason(currentSession.absenceReason);
       setStatus("ready");
-      return currentSession;
+      return currentSession.session;
     } catch (loadError) {
       if (signal?.aborted) {
         return null;
@@ -29,6 +35,7 @@ export function useCurrentSession(): CurrentSessionState {
           : "Unable to load current session.";
       if (!options?.preserveSessionOnError) {
         setSession(null);
+        setAbsenceReason(null);
         setStatus("error");
       } else {
         setStatus("ready");
@@ -47,6 +54,7 @@ export function useCurrentSession(): CurrentSessionState {
   return {
     status,
     session,
+    absenceReason,
     error,
     refresh: async () => {
       setStatus("loading");

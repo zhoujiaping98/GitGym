@@ -4,7 +4,7 @@ import { TopBar } from "./components/TopBar";
 import { Workbench } from "./components/Workbench";
 import { useCurrentSession } from "./hooks/useCurrentSession";
 import { useTerminalSession } from "./hooks/useTerminalSession";
-import { createPracticeSession, resetPracticeSession } from "./lib/api";
+import { createPracticeSession, logout, resetPracticeSession } from "./lib/api";
 import type { PracticeSession } from "./types";
 
 function templateLabel(templateId: number | null) {
@@ -14,6 +14,9 @@ function templateLabel(templateId: number | null) {
 
   return templateId ? `Template #${templateId}` : "Template: Standard";
 }
+
+const defaultSandboxScenarioId = 9;
+const defaultSandboxTemplateId = 1;
 
 type ActionErrorState = {
   message: string;
@@ -58,22 +61,44 @@ export default function App() {
   const currentSession = useCurrentSession();
   const [sessionOverride, setSessionOverride] = useState<PracticeSession | null>(null);
   const [actionError, setActionError] = useState<ActionErrorState | null>(null);
-  const [pendingAction, setPendingAction] = useState<"reset" | "new-session" | null>(null);
-  const displayedSession = sessionOverride ?? currentSession.session;
+  const [pendingAction, setPendingAction] = useState<"reset" | "new-session" | "logout" | null>(null);
+  const [hasAttemptedAutoCreate, setHasAttemptedAutoCreate] = useState(false);
+  const [signedOutOverride, setSignedOutOverride] = useState(false);
+  const effectiveSession = signedOutOverride ? null : currentSession.session;
+  const displayedSession = sessionOverride ?? effectiveSession;
   const terminalSession = useTerminalSession(displayedSession);
   const hasActiveSession =
     displayedSession !== null &&
-    (currentSession.status === "ready" || sessionOverride !== null);
+    ((currentSession.status === "ready" && !signedOutOverride) || sessionOverride !== null);
+  const hasAuthenticatedEmptyState =
+    !hasActiveSession &&
+    !signedOutOverride &&
+    currentSession.status === "ready" &&
+    currentSession.absenceReason === "missing";
 
   useEffect(() => {
     if (
       sessionOverride &&
       currentSession.status === "ready" &&
-      currentSession.session?.id === sessionOverride.id
+      effectiveSession?.id === sessionOverride.id
     ) {
       setSessionOverride(null);
     }
-  }, [currentSession.session, currentSession.status, sessionOverride]);
+  }, [currentSession.status, effectiveSession, sessionOverride]);
+
+  useEffect(() => {
+    if (!hasAuthenticatedEmptyState) {
+      setHasAttemptedAutoCreate(false);
+      return;
+    }
+
+    if (hasAttemptedAutoCreate || actionError || pendingAction === "new-session") {
+      return;
+    }
+
+    setHasAttemptedAutoCreate(true);
+    startNewSession(defaultSandboxScenarioId, defaultSandboxTemplateId);
+  }, [actionError, hasAttemptedAutoCreate, hasAuthenticatedEmptyState, pendingAction]);
 
   async function reconcileSessionAction(
     action: "reset" | "new-session",
@@ -155,34 +180,38 @@ export default function App() {
     }
   }
 
+  function startNewSession(scenarioId: number, templateId: number) {
+    setActionError(null);
+    setPendingAction("new-session");
+    void createPracticeSession({
+      scenarioId,
+      templateId,
+    })
+      .then((nextSession) => {
+        setSessionOverride(nextSession);
+        return reconcileSessionAction("new-session", nextSession.id);
+      })
+      .catch((error: unknown) => {
+        setActionError({
+          message: error instanceof Error ? error.message : "Unable to create a new session.",
+        });
+      })
+      .finally(() => {
+        setPendingAction(null);
+      });
+  }
+
   const topBarActions = hasActiveSession
     ? [
         {
           label: "New Session",
           onClick: () => {
-            const session = displayedSession;
-            if (!session) {
+            if (displayedSession) {
+              startNewSession(displayedSession.scenarioId, displayedSession.templateId);
               return;
             }
 
-            setActionError(null);
-            setPendingAction("new-session");
-            void createPracticeSession({
-              scenarioId: session.scenarioId,
-              templateId: session.templateId,
-            })
-              .then((nextSession) => {
-                setSessionOverride(nextSession);
-                return reconcileSessionAction("new-session", nextSession.id);
-              })
-              .catch((error: unknown) => {
-                setActionError({
-                  message: error instanceof Error ? error.message : "Unable to create a new session.",
-                });
-              })
-              .finally(() => {
-                setPendingAction(null);
-              });
+            startNewSession(defaultSandboxScenarioId, defaultSandboxTemplateId);
           },
           disabled: pendingAction !== null,
         },
@@ -211,6 +240,28 @@ export default function App() {
           },
           disabled: pendingAction !== null,
         },
+        {
+          label: "Logout",
+          onClick: () => {
+            setActionError(null);
+            setPendingAction("logout");
+            void logout()
+              .then(() => {
+                setSessionOverride(null);
+                setSignedOutOverride(true);
+                return currentSession.refresh();
+              })
+              .catch((error: unknown) => {
+                setActionError({
+                  message: error instanceof Error ? error.message : "Unable to log out.",
+                });
+              })
+              .finally(() => {
+                setPendingAction(null);
+              });
+          },
+          disabled: pendingAction !== null,
+        },
       ]
     : [];
   const sessionTone =
@@ -224,6 +275,10 @@ export default function App() {
   const sessionLabel =
     hasActiveSession
       ? "Session live"
+      : signedOutOverride
+        ? "Signed out"
+      : hasAuthenticatedEmptyState
+        ? "Signed in"
       : currentSession.status === "loading"
         ? "Checking session"
         : currentSession.status === "error"
@@ -265,6 +320,25 @@ export default function App() {
           eyebrow="Restoring session"
           title="Checking session"
           body="Restoring your practice workbench."
+        />
+      ) : hasAuthenticatedEmptyState && !actionError ? (
+        <AppStateShell
+          eyebrow="Workspace ready"
+          title="Preparing your workspace"
+          body="Creating a disposable sandbox so you can land directly in the terminal."
+          detail="We will start you in the standard sandbox template."
+        />
+      ) : hasAuthenticatedEmptyState ? (
+        <AppStateShell
+          eyebrow="Workspace ready"
+          title="Create your first practice session"
+          body="Your GitHub login is active. Start a disposable sandbox before you try the command sequence."
+          detail={actionError.message}
+          actionLabel="New Session"
+          onAction={() => {
+            setHasAttemptedAutoCreate(true);
+            startNewSession(defaultSandboxScenarioId, defaultSandboxTemplateId);
+          }}
         />
       ) : currentSession.status === "error" || actionError ? (
         <AppStateShell
