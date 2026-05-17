@@ -25,9 +25,13 @@ func NewRouter(deps ...Dependencies) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/healthz", handlers.Health())
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Get("/auth/github/login", handlers.GitHubLogin())
+		r.Get("/auth/github/callback", handlers.GitHubCallback())
+
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireSessionCookie)
 			r.Get("/auth/me", handlers.AuthMe())
+			r.Post("/auth/logout", handlers.Logout())
 			r.Get("/templates", handlers.ListPracticeTemplates(dependencies.PracticeService))
 			r.Get("/practice-sessions/current", handlers.GetCurrentPracticeSession(dependencies.PracticeService))
 			r.Post("/practice-sessions", handlers.CreatePracticeSession(dependencies.PracticeService))
