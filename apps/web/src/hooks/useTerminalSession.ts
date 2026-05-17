@@ -79,8 +79,6 @@ export function useTerminalSession(
       if (reconnectTokenRef.current !== currentReconnectToken) {
         return;
       }
-
-      setStatus("ready");
     });
 
     socket.addEventListener("message", (event) => {
