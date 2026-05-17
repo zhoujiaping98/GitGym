@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -43,7 +44,15 @@ func RequireSessionCookie(authStore service.UserStore) func(http.Handler) http.H
 			}
 
 			browserSession, err := authStore.GetBrowserSessionByTokenHash(r.Context(), service.HashSessionToken(cookie.Value))
-			if err != nil || browserSession.UserID == 0 || browserSession.ExpiresAt.Before(time.Now().UTC()) {
+			if err != nil {
+				if errors.Is(err, service.ErrBrowserSessionNotFound) {
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
+				}
+				http.Error(w, "auth store failure", http.StatusInternalServerError)
+				return
+			}
+			if browserSession.UserID == 0 || browserSession.ExpiresAt.Before(time.Now().UTC()) {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}

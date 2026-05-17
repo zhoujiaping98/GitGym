@@ -337,6 +337,25 @@ func TestAuthMeReturnsUnauthorizedWithoutPersistedSession(t *testing.T) {
 	}
 }
 
+func TestAuthMeReturnsServerErrorWhenSessionStoreLookupFails(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "raw-token"})
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter(httpx.Dependencies{
+		AuthStore: &stubUserStore{
+			getBrowserSessionErr: errors.New("mysql read timeout"),
+		},
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "auth store") {
+		t.Fatalf("expected auth store failure body, got %q", rec.Body.String())
+	}
+}
+
 func TestAuthMeDefaultRouterReturnsServerErrorWithoutAuthBacking(t *testing.T) {
 	restore := httpx.SetDefaultAuthStoreFactoryForTests(nil)
 	t.Cleanup(restore)
@@ -459,14 +478,13 @@ func TestLogoutRequiresRealSession(t *testing.T) {
 }
 
 func TestLogoutClearsStaleCookieWithoutPersistedSession(t *testing.T) {
-	restore := httpx.SetDefaultAuthStoreFactoryForTests(nil)
-	t.Cleanup(restore)
-
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
 	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "stale-token"})
 	rec := httptest.NewRecorder()
 
-	httpx.NewRouter().ServeHTTP(rec, req)
+	httpx.NewRouter(httpx.Dependencies{
+		AuthStore: &stubUserStore{},
+	}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d with body %s", rec.Code, rec.Body.String())
@@ -481,6 +499,59 @@ func TestLogoutClearsStaleCookieWithoutPersistedSession(t *testing.T) {
 	}
 	if clearedCookie == nil || clearedCookie.MaxAge >= 0 {
 		t.Fatalf("expected stale session cookie to be cleared, got %#v", clearedCookie)
+	}
+}
+
+func TestLogoutReturnsServerErrorWhenAuthStoreUnavailableButClearsCookie(t *testing.T) {
+	restore := httpx.SetDefaultAuthStoreFactoryForTests(nil)
+	t.Cleanup(restore)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "stale-token"})
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+
+	var clearedCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "gitgym_session" {
+			clearedCookie = cookie
+			break
+		}
+	}
+	if clearedCookie == nil || clearedCookie.MaxAge >= 0 {
+		t.Fatalf("expected session cookie to be cleared, got %#v", clearedCookie)
+	}
+}
+
+func TestLogoutReturnsServerErrorWhenRevokeFailsButClearsCookie(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "stale-token"})
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter(httpx.Dependencies{
+		AuthStore: &stubUserStore{
+			revokeErr: errors.New("mysql write timeout"),
+		},
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+
+	var clearedCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "gitgym_session" {
+			clearedCookie = cookie
+			break
+		}
+	}
+	if clearedCookie == nil || clearedCookie.MaxAge >= 0 {
+		t.Fatalf("expected session cookie to be cleared, got %#v", clearedCookie)
 	}
 }
 
@@ -552,12 +623,14 @@ func TestNormalizeMySQLDSNEnablesParseTimeAndUTC(t *testing.T) {
 }
 
 type stubUserStore struct {
-	upsertedProfile    *service.GitHubProfile
-	userByGitHubID     map[uint64]domain.CurrentUser
-	userByID           map[uint64]domain.CurrentUser
-	sessionByTokenHash map[string]domain.BrowserSession
-	createdSession     *service.BrowserSessionRecord
-	revokedTokenHash   string
+	upsertedProfile      *service.GitHubProfile
+	userByGitHubID       map[uint64]domain.CurrentUser
+	userByID             map[uint64]domain.CurrentUser
+	sessionByTokenHash   map[string]domain.BrowserSession
+	createdSession       *service.BrowserSessionRecord
+	revokedTokenHash     string
+	getBrowserSessionErr error
+	revokeErr            error
 }
 
 func (s *stubUserStore) UpsertGitHubUser(_ context.Context, profile service.GitHubProfile) (uint64, error) {
@@ -595,6 +668,9 @@ func (s *stubUserStore) CreateBrowserSession(_ context.Context, userID uint64, t
 }
 
 func (s *stubUserStore) GetBrowserSessionByTokenHash(_ context.Context, tokenHash string) (domain.BrowserSession, error) {
+	if s.getBrowserSessionErr != nil {
+		return domain.BrowserSession{}, s.getBrowserSessionErr
+	}
 	session, ok := s.sessionByTokenHash[tokenHash]
 	if !ok {
 		return domain.BrowserSession{}, service.ErrBrowserSessionNotFound
@@ -603,6 +679,9 @@ func (s *stubUserStore) GetBrowserSessionByTokenHash(_ context.Context, tokenHas
 }
 
 func (s *stubUserStore) RevokeBrowserSession(_ context.Context, tokenHash string) error {
+	if s.revokeErr != nil {
+		return s.revokeErr
+	}
 	s.revokedTokenHash = tokenHash
 	return nil
 }

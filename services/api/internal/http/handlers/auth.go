@@ -137,11 +137,16 @@ func Logout(authStore service.UserStore) http.HandlerFunc {
 			return
 		}
 
-		if authStore != nil {
-			_ = authStore.RevokeBrowserSession(r.Context(), service.HashSessionToken(cookie.Value))
-		}
-
 		clearBrowserSessionCookie(w)
+
+		if authStore == nil {
+			http.Error(w, "auth store is not configured", http.StatusInternalServerError)
+			return
+		}
+		if err := authStore.RevokeBrowserSession(r.Context(), service.HashSessionToken(cookie.Value)); err != nil {
+			http.Error(w, "failed to revoke browser session", http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
