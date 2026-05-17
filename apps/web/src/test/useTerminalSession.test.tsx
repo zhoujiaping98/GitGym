@@ -23,6 +23,7 @@ class MockWebSocket {
 
   url: string;
   listeners: ListenerMap = {};
+  sent: string[] = [];
 
   constructor(url: string) {
     this.url = url;
@@ -36,6 +37,10 @@ class MockWebSocket {
 
   close() {
     return undefined;
+  }
+
+  send(data: string) {
+    this.sent.push(data);
   }
 
   emit(type: string, event?: MessageEvent) {
@@ -64,6 +69,69 @@ describe("useTerminalSession", () => {
     expect(result.current.history).toEqual([]);
     expect(result.current.error).toBeNull();
     expect(result.current.terminalUrl).toContain("/practice-sessions/42/terminal");
+  });
+
+  it("records streamed terminal output frames", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() => useTerminalSession(activeSession));
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+
+    act(() => {
+      MockWebSocket.instances[0].emit("open");
+      MockWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({ type: "output", data: "$ git status\r\n" }),
+      } as MessageEvent);
+    });
+
+    await waitFor(() => {
+      expect(result.current.transcript).toContain("$ git status\r\n");
+    });
+  });
+
+  it("exposes writable terminal state when the websocket is ready", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() => useTerminalSession(activeSession));
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+
+    act(() => {
+      MockWebSocket.instances[0].emit("open");
+      MockWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({ type: "ready", cols: 120, rows: 40 }),
+      } as MessageEvent);
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("ready");
+    });
+
+    expect(result.current.sendInput).toBeTypeOf("function");
+    expect(result.current.resize).toBeTypeOf("function");
+  });
+
+  it("marks terminal unavailable when a transport close arrives before ready", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() => useTerminalSession(activeSession));
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+
+    act(() => {
+      MockWebSocket.instances[0].emit("close");
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
   });
 
   it("marks the terminal unavailable without inventing transcript or history entries", async () => {

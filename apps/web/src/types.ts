@@ -37,4 +37,6 @@ export type TerminalSessionState = {
   terminalUrl: string | null;
   error: string | null;
   reconnect: () => void;
+  sendInput: (data: string) => void;
+  resize: (cols: number, rows: number) => void;
 };
