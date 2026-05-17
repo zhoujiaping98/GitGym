@@ -7,7 +7,10 @@ export function useCurrentSession(): CurrentSessionState {
   const [session, setSession] = useState<PracticeSession | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function load(signal?: AbortSignal): Promise<PracticeSession | null> {
+  async function load(
+    signal?: AbortSignal,
+    options?: { preserveSessionOnError?: boolean },
+  ): Promise<PracticeSession | null> {
     setError(null);
 
     try {
@@ -20,12 +23,16 @@ export function useCurrentSession(): CurrentSessionState {
         return null;
       }
 
-      setSession(null);
-      setStatus("error");
       const nextError =
         loadError instanceof Error
           ? loadError.message
           : "Unable to load current session.";
+      if (!options?.preserveSessionOnError) {
+        setSession(null);
+        setStatus("error");
+      } else {
+        setStatus("ready");
+      }
       setError(nextError);
       throw loadError instanceof Error ? loadError : new Error(nextError);
     }
@@ -43,7 +50,7 @@ export function useCurrentSession(): CurrentSessionState {
     error,
     refresh: async () => {
       setStatus("loading");
-      return load();
+      return load(undefined, { preserveSessionOnError: session !== null });
     },
   };
 }

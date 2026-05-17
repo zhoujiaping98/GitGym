@@ -233,4 +233,80 @@ test.describe("GitGym shell", () => {
     await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
     await expect(page.getByText("runner-43")).toHaveCount(0);
   });
+
+  test("keeps the current workbench visible when reconciliation refresh fails", async ({
+    page,
+  }) => {
+    let currentSessionCalls = 0;
+
+    await page.route("**/api/v1/practice-sessions/current", async (route) => {
+      currentSessionCalls += 1;
+
+      if (currentSessionCalls === 1) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            session: {
+              id: 42,
+              user_id: 7,
+              scenario_id: 9,
+              template_id: 1,
+              runner_ref: "runner-42",
+              workspace_path: "/tmp/gitgym/session-42",
+              status: "active",
+              started_at: "2026-05-16T10:00:00.000Z",
+              expires_at: "2026-05-16T12:00:00.000Z",
+              last_activity_at: "2026-05-16T10:05:00.000Z",
+            },
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "api offline" }),
+      });
+    });
+
+    await page.route("**/api/v1/practice-sessions", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          session: {
+            id: 43,
+            user_id: 7,
+            scenario_id: 9,
+            template_id: 1,
+            runner_ref: "runner-43",
+            workspace_path: "/tmp/gitgym/session-43",
+            status: "active",
+            started_at: "2026-05-16T10:10:00.000Z",
+            expires_at: "2026-05-16T12:10:00.000Z",
+            last_activity_at: "2026-05-16T10:10:00.000Z",
+          },
+        }),
+      });
+    });
+
+    await page.goto("/");
+    await expect(page.getByText("runner-42")).toBeVisible();
+
+    await page.getByRole("button", { name: "New Session" }).click();
+
+    await expect(page.getByText("runner-42")).toBeVisible();
+    await expect(page.getByText("Terminal")).toBeVisible();
+    await expect(
+      page.getByText("Created a new session, but refreshing it failed: api offline"),
+    ).toBeVisible();
+    await expect(page.getByText("runner-43")).toHaveCount(0);
+  });
 });

@@ -24,7 +24,7 @@ beforeEach(() => {
 });
 
 describe("useCurrentSession", () => {
-  it("rejects refresh and exposes an error state when reloading fails", async () => {
+  it("keeps the last known session mounted when refresh fails", async () => {
     mockFetchCurrentSession
       .mockResolvedValueOnce(activeSession)
       .mockRejectedValueOnce(new Error("api offline"));
@@ -41,10 +41,10 @@ describe("useCurrentSession", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.status).toBe("error");
+      expect(result.current.status).toBe("ready");
     });
 
-    expect(result.current.session).toBeNull();
+    expect(result.current.session).toEqual(activeSession);
     expect(result.current.error).toBe("api offline");
   });
 });
