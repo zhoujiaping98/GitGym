@@ -306,6 +306,36 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not show retry sync when creating a new session fails before reconciliation", async () => {
+    mockCreatePracticeSession.mockRejectedValueOnce(new Error("create failed"));
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue({
+      status: "ready",
+      transcript: [],
+      history: [],
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      error: null,
+      reconnect: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("create failed")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("button", { name: "Retry sync" })).not.toBeInTheDocument();
+  });
+
   it("surfaces a reset reconciliation error when refresh returns no current session", async () => {
     const refresh = vi.fn().mockResolvedValue(null);
 

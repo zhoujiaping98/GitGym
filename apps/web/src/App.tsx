@@ -15,6 +15,11 @@ function templateLabel(templateId: number | null) {
   return templateId ? `Template #${templateId}` : "Template: Standard";
 }
 
+type ActionErrorState = {
+  message: string;
+  retryExpectedSessionId?: number;
+};
+
 type AppStateShellProps = {
   eyebrow: string;
   title: string;
@@ -52,7 +57,7 @@ function AppStateShell({
 export default function App() {
   const currentSession = useCurrentSession();
   const [sessionOverride, setSessionOverride] = useState<PracticeSession | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ActionErrorState | null>(null);
   const [pendingAction, setPendingAction] = useState<"reset" | "new-session" | null>(null);
   const displayedSession = sessionOverride ?? currentSession.session;
   const terminalSession = useTerminalSession(displayedSession);
@@ -79,54 +84,74 @@ export default function App() {
 
       if (!refreshedSession) {
         setSessionOverride(null);
-        setActionError(
-          action === "new-session"
-            ? "Created a new session, but the server did not return it as current."
-            : "Reset completed, but the server did not return a current session.",
-        );
+        setActionError({
+          message:
+            action === "new-session"
+              ? "Created a new session, but the server did not return it as current."
+              : "Reset completed, but the server did not return a current session.",
+        });
         return;
       }
 
       if (refreshedSession.id !== expectedSessionId) {
         setSessionOverride(refreshedSession);
-        setActionError(
-          action === "new-session"
-            ? `Created session #${expectedSessionId}, but the server returned session #${refreshedSession.id}.`
-            : `Reset session #${expectedSessionId}, but the server returned session #${refreshedSession.id}.`,
-        );
+        setActionError({
+          message:
+            action === "new-session"
+              ? `Created session #${expectedSessionId}, but the server returned session #${refreshedSession.id}.`
+              : `Reset session #${expectedSessionId}, but the server returned session #${refreshedSession.id}.`,
+          retryExpectedSessionId: expectedSessionId,
+        });
         return;
       }
 
       setActionError(null);
     } catch (error) {
       setSessionOverride(null);
-      setActionError(
-        `${
+      setActionError({
+        message: `${
           action === "new-session"
             ? "Created a new session"
             : "Reset completed"
         }, but refreshing it failed: ${
           error instanceof Error ? error.message : "Unable to refresh the current session."
         }`,
-      );
+        retryExpectedSessionId: expectedSessionId,
+      });
     }
   }
 
   async function retrySessionRefresh() {
     try {
       const refreshedSession = await currentSession.refresh();
+      if (!actionError?.retryExpectedSessionId) {
+        setActionError(null);
+        return;
+      }
       if (!refreshedSession) {
         setSessionOverride(null);
-        setActionError("The server did not return a current session.");
+        setActionError({
+          message: "The server did not return a current session.",
+          retryExpectedSessionId: actionError.retryExpectedSessionId,
+        });
+        return;
+      }
+      if (refreshedSession.id !== actionError.retryExpectedSessionId) {
+        setSessionOverride(refreshedSession);
+        setActionError({
+          message: `Expected session #${actionError.retryExpectedSessionId}, but the server returned session #${refreshedSession.id}.`,
+          retryExpectedSessionId: actionError.retryExpectedSessionId,
+        });
         return;
       }
 
       setSessionOverride(refreshedSession);
       setActionError(null);
     } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : "Unable to refresh the current session.",
-      );
+      setActionError({
+        message: error instanceof Error ? error.message : "Unable to refresh the current session.",
+        retryExpectedSessionId: actionError?.retryExpectedSessionId,
+      });
     }
   }
 
@@ -151,9 +176,9 @@ export default function App() {
                 return reconcileSessionAction("new-session", nextSession.id);
               })
               .catch((error: unknown) => {
-                setActionError(
-                  error instanceof Error ? error.message : "Unable to create a new session.",
-                );
+                setActionError({
+                  message: error instanceof Error ? error.message : "Unable to create a new session.",
+                });
               })
               .finally(() => {
                 setPendingAction(null);
@@ -176,9 +201,9 @@ export default function App() {
                 return reconcileSessionAction("reset", session.id);
               })
               .catch((error: unknown) => {
-                setActionError(
-                  error instanceof Error ? error.message : "Unable to reset this session.",
-                );
+                setActionError({
+                  message: error instanceof Error ? error.message : "Unable to reset this session.",
+                });
               })
               .finally(() => {
                 setPendingAction(null);
@@ -224,10 +249,12 @@ export default function App() {
             </p>
             {actionError ? (
               <div className="session-state-detail">
-                <div>{actionError}</div>
-                <button className="top-bar-button" onClick={() => void retrySessionRefresh()} type="button">
-                  Retry sync
-                </button>
+                <div>{actionError.message}</div>
+                {actionError.retryExpectedSessionId ? (
+                  <button className="top-bar-button" onClick={() => void retrySessionRefresh()} type="button">
+                    Retry sync
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -248,7 +275,7 @@ export default function App() {
               ? "We could not reconcile your current practice session."
               : "We could not restore your current practice session."
           }
-          detail={actionError ?? currentSession.error}
+          detail={actionError?.message ?? currentSession.error}
           actionLabel="Try again"
           onAction={() => {
             setActionError(null);
