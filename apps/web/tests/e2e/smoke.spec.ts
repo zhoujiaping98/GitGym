@@ -307,6 +307,7 @@ test.describe("GitGym shell", () => {
     await expect(
       page.getByText("Created a new session, but refreshing it failed: api offline"),
     ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry sync" })).toBeVisible();
     await expect(page.getByText("runner-43")).toHaveCount(0);
   });
 });

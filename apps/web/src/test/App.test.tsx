@@ -269,6 +269,7 @@ describe("App", () => {
 
     expect(screen.queryByText("runner-43")).not.toBeInTheDocument();
     expect(screen.getByText("Created a new session, but refreshing it failed: api offline")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry sync" })).toBeInTheDocument();
   });
 
   it("replaces the optimistic new session when refresh returns a different current session", async () => {

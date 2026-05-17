@@ -112,6 +112,24 @@ export default function App() {
     }
   }
 
+  async function retrySessionRefresh() {
+    try {
+      const refreshedSession = await currentSession.refresh();
+      if (!refreshedSession) {
+        setSessionOverride(null);
+        setActionError("The server did not return a current session.");
+        return;
+      }
+
+      setSessionOverride(refreshedSession);
+      setActionError(null);
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : "Unable to refresh the current session.",
+      );
+    }
+  }
+
   const topBarActions = hasActiveSession
     ? [
         {
@@ -204,7 +222,14 @@ export default function App() {
               The terminal is attached to your active workspace. Repository and
               command history panels stay visible without taking over the page.
             </p>
-            {actionError ? <div className="session-state-detail">{actionError}</div> : null}
+            {actionError ? (
+              <div className="session-state-detail">
+                <div>{actionError}</div>
+                <button className="top-bar-button" onClick={() => void retrySessionRefresh()} type="button">
+                  Retry sync
+                </button>
+              </div>
+            ) : null}
           </div>
           <Workbench session={displayedSession} terminal={terminalSession} />
         </main>
