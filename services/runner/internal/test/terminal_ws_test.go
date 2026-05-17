@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -126,6 +127,29 @@ func TestTerminalWebSocketHandlesResizeMessages(t *testing.T) {
 	}
 }
 
+func TestTerminalWebSocketClosesWhenPTYSessionEnds(t *testing.T) {
+	workspace := createGitWorkspace(t)
+	manager := engine.NewTerminalManager()
+	conn := dialTerminalWebSocket(t, workspace.ID, filepath.Dir(workspace.Path), manager)
+	t.Cleanup(func() {
+		closeTerminalWebSocket(t, conn)
+	})
+
+	assertTerminalReadyFrame(t, conn)
+
+	if err := wsjson.Write(context.Background(), conn, engine.TerminalClientMessage{
+		Type: "input",
+		Data: shellExit(),
+	}); err != nil {
+		t.Fatalf("write terminal exit input: %v", err)
+	}
+
+	status := readTerminalWebSocketCloseStatus(t, conn)
+	if status != websocket.StatusNormalClosure {
+		t.Fatalf("expected terminal websocket close status %v after PTY exit, got %v", websocket.StatusNormalClosure, status)
+	}
+}
+
 func dialTerminalWebSocket(t *testing.T, workspaceID string, workRoot string, manager *engine.TerminalManager) *websocket.Conn {
 	t.Helper()
 
@@ -165,7 +189,9 @@ func releaseManagedTerminalSocketSession(t *testing.T, manager *engine.TerminalM
 func closeTerminalWebSocket(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
 
-	if err := conn.Close(websocket.StatusNormalClosure, ""); err != nil && !errors.Is(err, context.Canceled) {
+	if err := conn.Close(websocket.StatusNormalClosure, ""); err != nil &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, net.ErrClosed) {
 		t.Fatalf("close terminal websocket: %v", err)
 	}
 }
@@ -240,4 +266,25 @@ func readTerminalSizeFromWebSocket(t *testing.T, conn *websocket.Conn) (uint16, 
 	}
 
 	return cols, rows
+}
+
+func readTerminalWebSocketCloseStatus(t *testing.T, conn *websocket.Conn) websocket.StatusCode {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for {
+		var message engine.TerminalServerMessage
+		err := wsjson.Read(ctx, conn, &message)
+		if err == nil {
+			continue
+		}
+
+		if status := websocket.CloseStatus(err); status != -1 {
+			return status
+		}
+
+		t.Fatalf("read terminal websocket close frame: %v", err)
+	}
 }

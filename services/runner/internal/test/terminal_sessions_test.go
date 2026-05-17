@@ -290,6 +290,14 @@ func shellPrintSize(marker string) string {
 	return shellPrintSizeForOS(runtime.GOOS, marker)
 }
 
+func shellExit() string {
+	if runtime.GOOS == "windows" {
+		return "exit\r\n"
+	}
+
+	return "exit\n"
+}
+
 func samePath(got string, want string) bool {
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(got, want)

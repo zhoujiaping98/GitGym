@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 
 	"gitgym/services/runner/internal/engine"
 	"github.com/coder/websocket"
@@ -28,14 +29,20 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
 
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 
+		var closeOnce sync.Once
+		closeConn := func(code websocket.StatusCode, reason string) {
+			closeOnce.Do(func() {
+				_ = conn.Close(code, reason)
+			})
+		}
+
 		session, err := manager.Acquire(ctx, workspacePath, workspaceID)
 		if err != nil {
-			_ = conn.Close(websocket.StatusInternalError, err.Error())
+			closeConn(websocket.StatusInternalError, "terminal unavailable")
 			return
 		}
 
@@ -55,8 +62,11 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 					Data: string(chunk),
 				})
 			})
-			if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
-				_ = conn.Close(websocket.StatusNormalClosure, "")
+			switch {
+			case streamErr == nil:
+				closeConn(websocket.StatusNormalClosure, "")
+			case !errors.Is(streamErr, context.Canceled):
+				closeConn(websocket.StatusInternalError, "terminal stream failed")
 			}
 			streamDone <- streamErr
 		}()
@@ -74,12 +84,12 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 			switch message.Type {
 			case "input":
 				if err := session.WriteInput(message.Data); err != nil {
-					_ = conn.Close(websocket.StatusInternalError, err.Error())
+					closeConn(websocket.StatusInternalError, "terminal unavailable")
 					return
 				}
 			case "resize":
 				if err := session.Resize(message.Cols, message.Rows); err != nil {
-					_ = conn.Close(websocket.StatusInternalError, err.Error())
+					closeConn(websocket.StatusInternalError, "terminal unavailable")
 					return
 				}
 			case "ping":
