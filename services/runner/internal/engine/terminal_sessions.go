@@ -26,15 +26,18 @@ type TerminalSession struct {
 	mu          sync.Mutex
 	backend     terminalBackend
 	process     *os.Process
+	terminate   func() error
 	wait        func() error
 	subscribers map[int]chan []byte
 	nextID      int
 	closed      bool
 	closeErr    error
 	backendErr  error
+	waitErr     error
 	done        chan struct{}
 	doneOnce    sync.Once
 	backendOnce sync.Once
+	waitOnce    sync.Once
 }
 
 type terminalBackend interface {
@@ -215,15 +218,7 @@ func (s *TerminalSession) ReadLoop(ctx context.Context, onData func([]byte) erro
 }
 
 func (s *TerminalSession) Wait() error {
-	s.mu.Lock()
-	wait := s.wait
-	s.mu.Unlock()
-
-	if wait == nil {
-		return errors.New("terminal session does not have a running process")
-	}
-
-	return wait()
+	return s.waitProcess()
 }
 
 func (s *TerminalSession) isClosed() bool {
@@ -277,6 +272,7 @@ func startUnixShell(ctx context.Context, session *TerminalSession) error {
 
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = session.WorkspacePath
+	configureTerminalCommand(cmd)
 
 	ptmx, err := unixpty.Start(cmd)
 	if err != nil {
@@ -286,10 +282,14 @@ func startUnixShell(ctx context.Context, session *TerminalSession) error {
 	session.mu.Lock()
 	session.backend = &unixTerminalBackend{file: ptmx}
 	session.process = cmd.Process
+	session.terminate = func() error {
+		return terminateTerminalProcessTree(cmd.Process)
+	}
 	session.wait = cmd.Wait
 	session.mu.Unlock()
 
 	go session.pump(session.backend)
+	go session.monitorProcessExit()
 	return nil
 }
 
@@ -315,10 +315,14 @@ func startWindowsShell(ctx context.Context, session *TerminalSession) error {
 	session.mu.Lock()
 	session.backend = &windowsTerminalBackend{pty: pty}
 	session.process = cmd.Process
+	session.terminate = func() error {
+		return terminateTerminalProcessTree(cmd.Process)
+	}
 	session.wait = cmd.Wait
 	session.mu.Unlock()
 
 	go session.pump(session.backend)
+	go session.monitorProcessExit()
 	return nil
 }
 
@@ -328,7 +332,13 @@ func shellCommand() (string, []string, error) {
 		if err != nil {
 			return "", nil, err
 		}
-		return command, []string{"-NoLogo"}, nil
+		return command, []string{
+			"-NoLogo",
+			"-NoProfile",
+			"-NoExit",
+			"-Command",
+			"$ErrorActionPreference='SilentlyContinue'; Import-Module PSReadLine -ErrorAction SilentlyContinue; Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction SilentlyContinue",
+		}, nil
 	}
 
 	return "sh", []string{"-l"}, nil
@@ -347,6 +357,10 @@ func (s *TerminalSession) pump(reader io.ReadCloser) {
 			return
 		}
 	}
+}
+
+func (s *TerminalSession) monitorProcessExit() {
+	_ = s.waitProcess()
 }
 
 func (s *TerminalSession) broadcast(chunk []byte) {
@@ -400,18 +414,17 @@ func (s *TerminalSession) close() error {
 
 	s.mu.Lock()
 	backend := s.backend
-	process := s.process
+	terminate := s.terminate
 	s.mu.Unlock()
 
 	var releaseErr error
-	if process != nil {
-		if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			releaseErr = errors.Join(releaseErr, err)
-		}
+	if terminate != nil {
+		releaseErr = errors.Join(releaseErr, terminate())
 	}
 	if backend != nil {
 		releaseErr = errors.Join(releaseErr, s.closeBackend())
 	}
+	releaseErr = errors.Join(releaseErr, s.reapProcess())
 
 	return releaseErr
 }
@@ -443,4 +456,43 @@ func (s *TerminalSession) closeBackend() error {
 	})
 
 	return s.backendErr
+}
+
+func (s *TerminalSession) waitProcess() error {
+	s.waitOnce.Do(func() {
+		s.mu.Lock()
+		wait := s.wait
+		s.mu.Unlock()
+
+		if wait == nil {
+			s.waitErr = errors.New("terminal session does not have a running process")
+			return
+		}
+
+		s.waitErr = wait()
+		s.finish(normalizeWaitCloseErr(s.waitErr))
+	})
+
+	return s.waitErr
+}
+
+func (s *TerminalSession) reapProcess() error {
+	err := s.waitProcess()
+	var exitErr *exec.ExitError
+	if err == nil || errors.As(err, &exitErr) || errors.Is(err, os.ErrProcessDone) {
+		return nil
+	}
+	return err
+}
+
+func normalizeWaitCloseErr(err error) error {
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &exitErr):
+		return io.EOF
+	default:
+		return err
+	}
 }

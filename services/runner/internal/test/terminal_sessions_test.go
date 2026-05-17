@@ -37,6 +37,7 @@ func TestTerminalManagerStartsShellForWorkspace(t *testing.T) {
 	if !samePath(match[1], workspace.Path) {
 		t.Fatalf("expected shell working directory %q, got %q", workspace.Path, match[1])
 	}
+	assertCleanShellStartup(t, output)
 
 	reused, err := manager.Acquire(context.Background(), workspace.Path, workspace.ID)
 	if err != nil {
@@ -130,6 +131,22 @@ func TestTerminalManagerClosesShellOnRelease(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for shell process to exit after release")
+	}
+}
+
+func TestShellPrintWorkingDirectoryUsesValidUnixCommand(t *testing.T) {
+	got := shellPrintWorkingDirectoryForOS("linux", "__MARKER__")
+	want := "printf '__MARKER__:%s\\n' \"$PWD\"\n"
+	if got != want {
+		t.Fatalf("expected unix cwd helper %q, got %q", want, got)
+	}
+}
+
+func TestShellPrintSizeUsesValidUnixCommand(t *testing.T) {
+	got := shellPrintSizeForOS("linux", "__MARKER__")
+	want := "set -- $(stty size); printf '__MARKER__:%sx%s\\n' \"$2\" \"$1\"\n"
+	if got != want {
+		t.Fatalf("expected unix size helper %q, got %q", want, got)
 	}
 }
 
@@ -231,15 +248,11 @@ func terminalMarker(prefix string) string {
 }
 
 func terminalLinePattern(marker string, valuePattern string) *regexp.Regexp {
-	return regexp.MustCompile(`(?:^|[\r\n])(?:\x1b\[[0-9;?]*[A-Za-z])*` + regexp.QuoteMeta(marker) + `:` + valuePattern + `(?:[\r\n]|$)`)
+	return regexp.MustCompile(`(?:^|[\r\n])(?:\x1b\[[0-9;?]*[A-Za-z])*` + regexp.QuoteMeta(marker) + `:` + valuePattern + `(?:\x1b\[[0-9;?]*[A-Za-z])*(?:[\r\n]|$)`)
 }
 
 func shellPrintWorkingDirectory(marker string) string {
-	if runtime.GOOS == "windows" {
-		return fmt.Sprintf("Write-Output \"%s:$((Get-Location).Path)\"\r\n", marker)
-	}
-
-	return fmt.Sprintf("printf '%s:%s\\n' '%s' \"$PWD\"\n", marker, "%s", marker)
+	return shellPrintWorkingDirectoryForOS(runtime.GOOS, marker)
 }
 
 func shellPrintLine(marker string, value string) string {
@@ -251,11 +264,7 @@ func shellPrintLine(marker string, value string) string {
 }
 
 func shellPrintSize(marker string) string {
-	if runtime.GOOS == "windows" {
-		return fmt.Sprintf("Write-Output \"%s:$($Host.UI.RawUI.WindowSize.Width)x$($Host.UI.RawUI.WindowSize.Height)\"\r\n", marker)
-	}
-
-	return fmt.Sprintf("set -- $(stty size); printf '%s:%sx%s\\n' '%s' \"$2\" \"$1\"\n", marker, "%s", "%s", marker)
+	return shellPrintSizeForOS(runtime.GOOS, marker)
 }
 
 func samePath(got string, want string) bool {
@@ -264,4 +273,39 @@ func samePath(got string, want string) bool {
 	}
 
 	return got == want
+}
+
+func shellPrintWorkingDirectoryForOS(goos string, marker string) string {
+	if goos == "windows" {
+		return fmt.Sprintf("Write-Output \"%s:$((Get-Location).Path)\"\r\n", marker)
+	}
+
+	return fmt.Sprintf("printf '%s:%%s\\n' \"$PWD\"\n", marker)
+}
+
+func shellPrintSizeForOS(goos string, marker string) string {
+	if goos == "windows" {
+		return fmt.Sprintf("Write-Output \"%s:$($Host.UI.RawUI.WindowSize.Width)x$($Host.UI.RawUI.WindowSize.Height)\"\r\n", marker)
+	}
+
+	return fmt.Sprintf("set -- $(stty size); printf '%s:%%sx%%s\\n' \"$2\" \"$1\"\n", marker)
+}
+
+func assertCleanShellStartup(t *testing.T, output string) {
+	t.Helper()
+
+	if runtime.GOOS != "windows" {
+		return
+	}
+
+	for _, fragment := range []string{
+		"PSSecurityException",
+		"PowerShell_profile.ps1",
+		"Microsoft.PowerShell_profile.ps1",
+		"PSReadLine",
+	} {
+		if strings.Contains(output, fragment) {
+			t.Fatalf("expected clean shell startup without %q noise, got %q", fragment, output)
+		}
+	}
 }
