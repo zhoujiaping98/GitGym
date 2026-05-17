@@ -13,7 +13,7 @@ vi.mock("../hooks/useCurrentSession", () => ({
 }));
 
 vi.mock("../hooks/useTerminalSession", () => ({
-  useTerminalSession: () => mockUseTerminalSession(),
+  useTerminalSession: (session: unknown) => mockUseTerminalSession(session),
 }));
 
 const activeSession = {
@@ -112,7 +112,9 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(screen.getByText("Checking session")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Checking session" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Restoring your practice workbench.")).toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "Continue with GitHub" }),
@@ -131,7 +133,9 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(screen.getByText("Session unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Session unavailable" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("We could not restore your current practice session.")).toBeInTheDocument();
     expect(screen.getByText("api offline")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();

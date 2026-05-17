@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useTerminalSession } from "../hooks/useTerminalSession";
 import type { PracticeSession } from "../types";
@@ -75,7 +75,9 @@ describe("useTerminalSession", () => {
       expect(MockWebSocket.instances).toHaveLength(1);
     });
 
-    MockWebSocket.instances[0].emit("error");
+    act(() => {
+      MockWebSocket.instances[0].emit("error");
+    });
 
     await waitFor(() => {
       expect(result.current.status).toBe("unavailable");
@@ -102,21 +104,25 @@ describe("useTerminalSession", () => {
       expect(MockWebSocket.instances).toHaveLength(1);
     });
 
-    MockWebSocket.instances[0].emit("open");
-    MockWebSocket.instances[0].emit("message", {
-      data: "$ git status",
-    } as MessageEvent);
+    act(() => {
+      MockWebSocket.instances[0].emit("open");
+      MockWebSocket.instances[0].emit("message", {
+        data: "$ git status",
+      } as MessageEvent);
+    });
 
     await waitFor(() => {
       expect(result.current.status).toBe("ready");
       expect(result.current.transcript).toEqual(["$ git status"]);
     });
 
-    rerender({
-      session: {
-        ...activeSession,
-        runnerRef: "runner-42-updated",
-      },
+    act(() => {
+      rerender({
+        session: {
+          ...activeSession,
+          runnerRef: "runner-42-updated",
+        },
+      });
     });
 
     await waitFor(() => {

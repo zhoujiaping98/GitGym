@@ -1,6 +1,21 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("GitGym shell", () => {
+  const activeSessionPayload = {
+    session: {
+      id: 42,
+      user_id: 7,
+      scenario_id: 9,
+      template_id: 1,
+      runner_ref: "runner-42",
+      workspace_path: "/tmp/gitgym/session-42",
+      status: "active",
+      started_at: "2026-05-16T10:00:00.000Z",
+      expires_at: "2026-05-16T12:00:00.000Z",
+      last_activity_at: "2026-05-16T10:05:00.000Z",
+    },
+  };
+
   test("shows the signed-out login shell when there is no active session", async ({
     page,
   }) => {
@@ -34,39 +49,31 @@ test.describe("GitGym shell", () => {
 
     await page.route("**/api/v1/practice-sessions/current", async (route) => {
       currentSessionCalls += 1;
-      if (currentSessionCalls > 1) {
+      if (currentSessionCalls > 2) {
         await refreshGate;
       }
 
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({
-          session: {
-            id: currentSessionCalls === 1 ? 42 : 43,
-            user_id: 7,
-            scenario_id: 9,
-            template_id: 1,
-            runner_ref: currentSessionCalls === 1 ? "runner-42" : "runner-43",
-            workspace_path:
-              currentSessionCalls === 1
-                ? "/tmp/gitgym/session-42"
-                : "/tmp/gitgym/session-43",
-            status: "active",
-            started_at:
-              currentSessionCalls === 1
-                ? "2026-05-16T10:00:00.000Z"
-                : "2026-05-16T10:10:00.000Z",
-            expires_at:
-              currentSessionCalls === 1
-                ? "2026-05-16T12:00:00.000Z"
-                : "2026-05-16T12:10:00.000Z",
-            last_activity_at:
-              currentSessionCalls === 1
-                ? "2026-05-16T10:05:00.000Z"
-                : "2026-05-16T10:10:00.000Z",
-          },
-        }),
+        body: JSON.stringify(
+          currentSessionCalls <= 2
+            ? activeSessionPayload
+            : {
+                session: {
+                  id: 43,
+                  user_id: 7,
+                  scenario_id: 9,
+                  template_id: 1,
+                  runner_ref: "runner-43",
+                  workspace_path: "/tmp/gitgym/session-43",
+                  status: "active",
+                  started_at: "2026-05-16T10:10:00.000Z",
+                  expires_at: "2026-05-16T12:10:00.000Z",
+                  last_activity_at: "2026-05-16T10:10:00.000Z",
+                },
+              },
+        ),
       });
     });
     await page.route("**/api/v1/practice-sessions", async (route) => {
@@ -116,8 +123,8 @@ test.describe("GitGym shell", () => {
 
     await expect(page.getByText("Session live")).toBeVisible();
     await expect(page.getByText("runner-42")).toBeVisible();
-    await expect(page.getByText("Repository")).toBeVisible();
-    await expect(page.getByText("History")).toBeVisible();
+    await expect(page.getByText("Repository", { exact: true })).toBeVisible();
+    await expect(page.getByText("History", { exact: true })).toBeVisible();
     await expect(
       page.getByRole("button", { name: "New Session" }),
     ).toBeVisible();
@@ -151,7 +158,9 @@ test.describe("GitGym shell", () => {
 
     await page.goto("/");
 
-    await expect(page.getByText("Session unavailable")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Session unavailable" }),
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
     await expect(
       page.getByRole("link", { name: "Continue with GitHub" }),
@@ -166,24 +175,11 @@ test.describe("GitGym shell", () => {
     await page.route("**/api/v1/practice-sessions/current", async (route) => {
       currentSessionCalls += 1;
 
-      if (currentSessionCalls === 1) {
+      if (currentSessionCalls <= 2) {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({
-            session: {
-              id: 42,
-              user_id: 7,
-              scenario_id: 9,
-              template_id: 1,
-              runner_ref: "runner-42",
-              workspace_path: "/tmp/gitgym/session-42",
-              status: "active",
-              started_at: "2026-05-16T10:00:00.000Z",
-              expires_at: "2026-05-16T12:00:00.000Z",
-              last_activity_at: "2026-05-16T10:05:00.000Z",
-            },
-          }),
+          body: JSON.stringify(activeSessionPayload),
         });
         return;
       }
@@ -226,7 +222,9 @@ test.describe("GitGym shell", () => {
 
     await page.getByRole("button", { name: "New Session" }).click();
 
-    await expect(page.getByText("Session unavailable")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Session unavailable" }),
+    ).toBeVisible();
     await expect(
       page.getByText("Created a new session, but the server did not return it as current."),
     ).toBeVisible();
@@ -242,24 +240,11 @@ test.describe("GitGym shell", () => {
     await page.route("**/api/v1/practice-sessions/current", async (route) => {
       currentSessionCalls += 1;
 
-      if (currentSessionCalls === 1) {
+      if (currentSessionCalls <= 2) {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({
-            session: {
-              id: 42,
-              user_id: 7,
-              scenario_id: 9,
-              template_id: 1,
-              runner_ref: "runner-42",
-              workspace_path: "/tmp/gitgym/session-42",
-              status: "active",
-              started_at: "2026-05-16T10:00:00.000Z",
-              expires_at: "2026-05-16T12:00:00.000Z",
-              last_activity_at: "2026-05-16T10:05:00.000Z",
-            },
-          }),
+          body: JSON.stringify(activeSessionPayload),
         });
         return;
       }
@@ -303,7 +288,7 @@ test.describe("GitGym shell", () => {
     await page.getByRole("button", { name: "New Session" }).click();
 
     await expect(page.getByText("runner-42")).toBeVisible();
-    await expect(page.getByText("Terminal")).toBeVisible();
+    await expect(page.getByText("Terminal", { exact: true })).toBeVisible();
     await expect(
       page.getByText("Created a new session, but refreshing it failed: api offline"),
     ).toBeVisible();
