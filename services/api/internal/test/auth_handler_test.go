@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	httpx "gitgym/services/api/internal/http"
+	"gitgym/services/api/internal/service"
 )
 
 func TestGitHubLoginRouteIsMountedAsStub(t *testing.T) {
@@ -76,5 +77,35 @@ func TestLogoutReturnsStubResponseWithSessionCookie(t *testing.T) {
 
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("expected 501, got %d", rec.Code)
+	}
+}
+
+func TestNewSessionTokenReturnsHexAndStableHash(t *testing.T) {
+	firstToken, err := service.NewSessionToken()
+	if err != nil {
+		t.Fatalf("expected token, got error: %v", err)
+	}
+	secondToken, err := service.NewSessionToken()
+	if err != nil {
+		t.Fatalf("expected token, got error: %v", err)
+	}
+
+	if len(firstToken) != 64 {
+		t.Fatalf("expected 64-char token, got %d", len(firstToken))
+	}
+	if len(secondToken) != 64 {
+		t.Fatalf("expected 64-char token, got %d", len(secondToken))
+	}
+	if firstToken == secondToken {
+		t.Fatalf("expected unique tokens, got %q", firstToken)
+	}
+
+	firstHash := service.HashSessionToken(firstToken)
+	secondHash := service.HashSessionToken(firstToken)
+	if firstHash == "" {
+		t.Fatalf("expected non-empty hash")
+	}
+	if firstHash != secondHash {
+		t.Fatalf("expected deterministic hash, got %q and %q", firstHash, secondHash)
 	}
 }

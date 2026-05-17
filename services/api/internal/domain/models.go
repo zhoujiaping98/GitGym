@@ -11,6 +11,16 @@ type CurrentUser struct {
 	Email       *string
 }
 
+type BrowserSession struct {
+	ID               uint64
+	UserID           uint64
+	SessionTokenHash string
+	UserAgent        *string
+	IPAddress        *string
+	ExpiresAt        time.Time
+	RevokedAt        *time.Time
+}
+
 type PracticeSession struct {
 	ID               uint64
 	UserID           uint64
