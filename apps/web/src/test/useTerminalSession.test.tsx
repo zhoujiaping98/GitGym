@@ -103,6 +103,11 @@ describe("useTerminalSession", () => {
 
     act(() => {
       MockWebSocket.instances[0].emit("open");
+    });
+
+    expect(result.current.status).toBe("connecting");
+
+    act(() => {
       MockWebSocket.instances[0].emit("message", {
         data: JSON.stringify({ type: "ready", cols: 120, rows: 40 }),
       } as MessageEvent);
@@ -112,8 +117,15 @@ describe("useTerminalSession", () => {
       expect(result.current.status).toBe("ready");
     });
 
-    expect(result.current.sendInput).toBeTypeOf("function");
-    expect(result.current.resize).toBeTypeOf("function");
+    act(() => {
+      result.current.sendInput("git status\n");
+      result.current.resize(120, 40);
+    });
+
+    expect(MockWebSocket.instances[0].sent).toEqual([
+      JSON.stringify({ type: "input", data: "git status\n" }),
+      JSON.stringify({ type: "resize", cols: 120, rows: 40 }),
+    ]);
   });
 
   it("marks terminal unavailable when a transport close arrives before ready", async () => {
@@ -175,7 +187,10 @@ describe("useTerminalSession", () => {
     act(() => {
       MockWebSocket.instances[0].emit("open");
       MockWebSocket.instances[0].emit("message", {
-        data: "$ git status",
+        data: JSON.stringify({ type: "ready", cols: 120, rows: 40 }),
+      } as MessageEvent);
+      MockWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({ type: "output", data: "$ git status" }),
       } as MessageEvent);
     });
 

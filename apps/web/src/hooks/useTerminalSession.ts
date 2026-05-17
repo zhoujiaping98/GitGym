@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { TerminalClientMessage } from "../lib/terminal-protocol";
 import { buildTerminalWebSocketUrl } from "../lib/ws";
 import type {
   CommandHistoryEntry,
@@ -7,6 +8,10 @@ import type {
 } from "../types";
 
 const unavailableSummary = "Terminal transport is unavailable for this session.";
+
+function sendTerminalMessage(message: TerminalClientMessage, socket: WebSocket | null) {
+  socket?.send(JSON.stringify(message));
+}
 
 export function useTerminalSession(
   session: PracticeSession | null,
@@ -123,6 +128,12 @@ export function useTerminalSession(
     error,
     reconnect: () => {
       setReconnectCount((count) => count + 1);
+    },
+    sendInput: (data) => {
+      sendTerminalMessage({ type: "input", data }, socketRef.current);
+    },
+    resize: (cols, rows) => {
+      sendTerminalMessage({ type: "resize", cols, rows }, socketRef.current);
     },
   };
 }
