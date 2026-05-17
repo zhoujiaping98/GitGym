@@ -329,7 +329,7 @@ func TestCreatePracticeSessionMapsErrors(t *testing.T) {
 		{name: "bad input", err: service.ErrInvalidPracticeSessionInput, status: http.StatusBadRequest},
 		{name: "unknown template", err: service.ErrUnknownPracticeTemplate, status: http.StatusBadRequest},
 		{name: "service configuration", err: service.ErrPracticeServiceConfiguration, status: http.StatusInternalServerError},
-		{name: "runner failure", err: service.ErrRunnerWorkspaceReset, status: http.StatusBadGateway},
+		{name: "runner creation failure", err: service.ErrRunnerWorkspaceCreation, status: http.StatusBadGateway},
 		{name: "wrapped runner failure", err: errors.Join(service.ErrRunnerWorkspaceCreation, errors.New("dial tcp timeout")), status: http.StatusBadGateway},
 	}
 
@@ -393,7 +393,7 @@ func TestResetPracticeSessionMapsErrors(t *testing.T) {
 		{name: "bad input", err: service.ErrInvalidPracticeSessionInput, status: http.StatusBadRequest},
 		{name: "not found", err: service.ErrPracticeSessionNotFound, status: http.StatusNotFound},
 		{name: "service configuration", err: service.ErrPracticeServiceConfiguration, status: http.StatusInternalServerError},
-		{name: "runner failure", err: service.ErrRunnerWorkspaceCreation, status: http.StatusBadGateway},
+		{name: "runner reset failure", err: service.ErrRunnerWorkspaceReset, status: http.StatusBadGateway},
 	}
 
 	for _, tc := range cases {

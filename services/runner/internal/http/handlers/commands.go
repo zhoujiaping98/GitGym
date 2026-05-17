@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gitgym/services/runner/internal/engine"
 	"github.com/go-chi/chi/v5"
 )
+
+var workspaceIDPattern = regexp.MustCompile(`^ws-[A-Za-z0-9]+$`)
 
 type runCommandRequest struct {
 	Command string `json:"command"`
@@ -105,10 +108,7 @@ func validateWorkspaceID(workspaceID string) error {
 	if strings.TrimSpace(workspaceID) == "" {
 		return errors.New("workspace ID is required")
 	}
-	if workspaceID == "." || workspaceID == ".." {
-		return errors.New("workspace ID is malformed")
-	}
-	if strings.Contains(workspaceID, "/") || strings.Contains(workspaceID, "\\") {
+	if !workspaceIDPattern.MatchString(workspaceID) {
 		return errors.New("workspace ID is malformed")
 	}
 	return nil

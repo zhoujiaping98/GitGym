@@ -9,7 +9,7 @@ import (
 func TestResolveWorkspacePathRejectsMalformedWorkspaceIDs(t *testing.T) {
 	root := t.TempDir()
 
-	validWorkspace := filepath.Join(root, "workspace-123")
+	validWorkspace := filepath.Join(root, "ws-123ABC")
 	if err := os.Mkdir(validWorkspace, 0o755); err != nil {
 		t.Fatalf("create valid workspace: %v", err)
 	}
@@ -17,6 +17,12 @@ func TestResolveWorkspacePathRejectsMalformedWorkspaceIDs(t *testing.T) {
 	for _, workspaceID := range []string{
 		".",
 		"..",
+		". ",
+		".. ",
+		"ws-123.",
+		"ws-123 ",
+		"workspace-123",
+		"ws-123-456",
 		"nested/child",
 		"nested\\child",
 		"./child",

@@ -29,6 +29,19 @@ const activeSession = {
   lastActivityAt: "2026-05-16T10:05:00.000Z",
 } as const;
 
+const nextSession = {
+  id: 43,
+  userId: 7,
+  scenarioId: 9,
+  templateId: 1,
+  runnerRef: "runner-43",
+  workspacePath: "/tmp/gitgym/session-43",
+  status: "active",
+  startedAt: "2026-05-16T10:10:00.000Z",
+  expiresAt: "2026-05-16T12:10:00.000Z",
+  lastActivityAt: "2026-05-16T10:10:00.000Z",
+} as const;
+
 beforeEach(() => {
   mockUseCurrentSession.mockReset();
   mockUseTerminalSession.mockReset();
@@ -50,7 +63,7 @@ beforeEach(() => {
   });
 
   mockCreatePracticeSession.mockReset();
-  mockCreatePracticeSession.mockResolvedValue(activeSession);
+  mockCreatePracticeSession.mockResolvedValue(nextSession);
   mockResetPracticeSession.mockReset();
   mockResetPracticeSession.mockResolvedValue(undefined);
 });
@@ -115,7 +128,7 @@ describe("App", () => {
   });
 
   it("renders the live workbench when there is an active session", async () => {
-    const refresh = vi.fn();
+    const refresh = vi.fn().mockResolvedValue(undefined);
     const reconnect = vi.fn();
 
     mockUseCurrentSession.mockReturnValue({
@@ -165,15 +178,47 @@ describe("App", () => {
         scenarioId: 9,
         templateId: 1,
       });
-      expect(refresh).toHaveBeenCalledTimes(1);
     });
+    await waitFor(() => {
+      expect(mockUseTerminalSession).toHaveBeenLastCalledWith(nextSession);
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("runner-43")).toBeInTheDocument();
+    expect(screen.queryByText("runner-42")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Reset" }));
 
     await waitFor(() => {
-      expect(mockResetPracticeSession).toHaveBeenCalledWith(42);
+      expect(mockResetPracticeSession).toHaveBeenCalledWith(43);
       expect(refresh).toHaveBeenCalledTimes(2);
     });
     expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  it("renders a reconnect action for unavailable terminals without resetting the session", () => {
+    const reconnect = vi.fn();
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(undefined),
+    });
+
+    mockUseTerminalSession.mockReturnValue({
+      status: "unavailable",
+      transcript: [],
+      history: [],
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      error: "Terminal transport is unavailable for this session.",
+      reconnect,
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(mockResetPracticeSession).not.toHaveBeenCalled();
   });
 });

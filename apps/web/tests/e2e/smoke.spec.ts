@@ -24,24 +24,47 @@ test.describe("GitGym shell", () => {
     page,
   }) => {
     let createSessionCalls = 0;
-    let resetSessionCalls = 0;
+    let currentSessionCalls = 0;
+    let resetOldSessionCalls = 0;
+    let resetNewSessionCalls = 0;
+    let releaseRefresh: (() => void) | null = null;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
 
     await page.route("**/api/v1/practice-sessions/current", async (route) => {
+      currentSessionCalls += 1;
+      if (currentSessionCalls > 1) {
+        await refreshGate;
+      }
+
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
           session: {
-            id: 42,
+            id: currentSessionCalls === 1 ? 42 : 43,
             user_id: 7,
             scenario_id: 9,
             template_id: 1,
-            runner_ref: "runner-42",
-            workspace_path: "/tmp/gitgym/session-42",
+            runner_ref: currentSessionCalls === 1 ? "runner-42" : "runner-43",
+            workspace_path:
+              currentSessionCalls === 1
+                ? "/tmp/gitgym/session-42"
+                : "/tmp/gitgym/session-43",
             status: "active",
-            started_at: "2026-05-16T10:00:00.000Z",
-            expires_at: "2026-05-16T12:00:00.000Z",
-            last_activity_at: "2026-05-16T10:05:00.000Z",
+            started_at:
+              currentSessionCalls === 1
+                ? "2026-05-16T10:00:00.000Z"
+                : "2026-05-16T10:10:00.000Z",
+            expires_at:
+              currentSessionCalls === 1
+                ? "2026-05-16T12:00:00.000Z"
+                : "2026-05-16T12:10:00.000Z",
+            last_activity_at:
+              currentSessionCalls === 1
+                ? "2026-05-16T10:05:00.000Z"
+                : "2026-05-16T10:10:00.000Z",
           },
         }),
       });
@@ -73,7 +96,15 @@ test.describe("GitGym shell", () => {
       });
     });
     await page.route("**/api/v1/practice-sessions/42/reset", async (route) => {
-      resetSessionCalls += 1;
+      resetOldSessionCalls += 1;
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "resetting" }),
+      });
+    });
+    await page.route("**/api/v1/practice-sessions/43/reset", async (route) => {
+      resetNewSessionCalls += 1;
       await route.fulfill({
         status: 202,
         contentType: "application/json",
@@ -84,6 +115,7 @@ test.describe("GitGym shell", () => {
     await page.goto("/");
 
     await expect(page.getByText("Session live")).toBeVisible();
+    await expect(page.getByText("runner-42")).toBeVisible();
     await expect(page.getByText("Repository")).toBeVisible();
     await expect(page.getByText("History")).toBeVisible();
     await expect(
@@ -94,11 +126,16 @@ test.describe("GitGym shell", () => {
     ).toBeVisible();
 
     await page.getByRole("button", { name: "New Session" }).click();
+    await expect(page.getByText("runner-43")).toBeVisible();
+    await expect(page.getByText("/tmp/gitgym/session-43")).toBeVisible();
+    await expect(page.getByText("session #43")).toBeVisible();
     await expect(page.getByRole("button", { name: "Reset" })).toBeVisible();
+    releaseRefresh?.();
     await page.getByRole("button", { name: "Reset" }).click();
 
     expect(createSessionCalls).toBe(1);
-    expect(resetSessionCalls).toBe(1);
+    expect(resetOldSessionCalls).toBe(0);
+    expect(resetNewSessionCalls).toBe(1);
   });
 
   test("shows a retryable session error state when lookup fails", async ({

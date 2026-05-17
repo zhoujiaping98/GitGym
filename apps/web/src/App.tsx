@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { LoginScreen } from "./components/LoginScreen";
 import { TopBar } from "./components/TopBar";
 import { Workbench } from "./components/Workbench";
 import { useCurrentSession } from "./hooks/useCurrentSession";
 import { useTerminalSession } from "./hooks/useTerminalSession";
 import { createPracticeSession, resetPracticeSession } from "./lib/api";
+import type { PracticeSession } from "./types";
 
 function templateLabel(templateId: number | null) {
   if (templateId === 1) {
@@ -50,16 +51,31 @@ function AppStateShell({
 
 export default function App() {
   const currentSession = useCurrentSession();
-  const terminalSession = useTerminalSession(currentSession.session);
+  const [sessionOverride, setSessionOverride] = useState<PracticeSession | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"reset" | "new-session" | null>(null);
-  const hasActiveSession = currentSession.status === "ready" && currentSession.session;
+  const displayedSession = sessionOverride ?? currentSession.session;
+  const terminalSession = useTerminalSession(displayedSession);
+  const hasActiveSession =
+    displayedSession !== null &&
+    (currentSession.status === "ready" || sessionOverride !== null);
+
+  useEffect(() => {
+    if (
+      sessionOverride &&
+      currentSession.status === "ready" &&
+      currentSession.session?.id === sessionOverride.id
+    ) {
+      setSessionOverride(null);
+    }
+  }, [currentSession.session, currentSession.status, sessionOverride]);
+
   const topBarActions = hasActiveSession
     ? [
         {
           label: "New Session",
           onClick: () => {
-            const session = currentSession.session;
+            const session = displayedSession;
             if (!session) {
               return;
             }
@@ -70,8 +86,9 @@ export default function App() {
               scenarioId: session.scenarioId,
               templateId: session.templateId,
             })
-              .then(async () => {
-                await currentSession.refresh();
+              .then((nextSession) => {
+                setSessionOverride(nextSession);
+                void currentSession.refresh().catch(() => undefined);
               })
               .catch((error: unknown) => {
                 setActionError(
@@ -87,7 +104,7 @@ export default function App() {
         {
           label: "Reset",
           onClick: () => {
-            const session = currentSession.session;
+            const session = displayedSession;
             if (!session) {
               return;
             }
@@ -95,8 +112,8 @@ export default function App() {
             setActionError(null);
             setPendingAction("reset");
             void resetPracticeSession(session.id)
-              .then(async () => {
-                await currentSession.refresh();
+              .then(() => {
+                void currentSession.refresh().catch(() => undefined);
               })
               .catch((error: unknown) => {
                 setActionError(
@@ -112,13 +129,13 @@ export default function App() {
       ]
     : [];
   const sessionTone =
-    currentSession.status === "loading"
+    hasActiveSession
+      ? "active"
+      : currentSession.status === "loading"
       ? "pending"
       : currentSession.status === "error"
-        ? "error"
-        : hasActiveSession
-          ? "active"
-          : "idle";
+      ? "error"
+      : "idle";
   const sessionLabel =
     hasActiveSession
       ? "Session live"
@@ -132,7 +149,7 @@ export default function App() {
     <div className="app-shell">
       <TopBar
         actions={topBarActions}
-        metaLabel={templateLabel(currentSession.session?.templateId ?? null)}
+        metaLabel={templateLabel(displayedSession?.templateId ?? null)}
         sessionLabel={sessionLabel}
         tone={sessionTone}
       />
@@ -147,7 +164,7 @@ export default function App() {
             </p>
             {actionError ? <div className="session-state-detail">{actionError}</div> : null}
           </div>
-          <Workbench session={currentSession.session} terminal={terminalSession} />
+          <Workbench session={displayedSession} terminal={terminalSession} />
         </main>
       ) : currentSession.status === "loading" ? (
         <AppStateShell

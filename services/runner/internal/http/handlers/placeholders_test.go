@@ -109,7 +109,7 @@ func TestResetWorkspaceReturnsResettingStatusAndRehydratesWorkspace(t *testing.T
 	}
 }
 
-func TestWorkspaceEndpointsRejectMalformedDotWorkspaceIDs(t *testing.T) {
+func TestWorkspaceEndpointsRejectMalformedWorkspaceIDs(t *testing.T) {
 	router := httpx.NewRouter(t.TempDir())
 
 	for _, tc := range []struct {
@@ -119,15 +119,32 @@ func TestWorkspaceEndpointsRejectMalformedDotWorkspaceIDs(t *testing.T) {
 		body   string
 	}{
 		{
-			name:   "commands rejects current directory",
+			name:   "commands rejects encoded current directory",
 			method: http.MethodPost,
-			target: "/internal/workspaces/./commands",
+			target: "/internal/workspaces/%2e/commands",
 			body:   `{"command":"git status --short"}`,
 		},
 		{
-			name:   "reset rejects parent directory",
+			name:   "commands rejects encoded dot space alias",
 			method: http.MethodPost,
-			target: "/internal/workspaces/../reset",
+			target: "/internal/workspaces/.%20/commands",
+			body:   `{"command":"git status --short"}`,
+		},
+		{
+			name:   "reset rejects encoded parent directory",
+			method: http.MethodPost,
+			target: "/internal/workspaces/%2e%2e/reset",
+		},
+		{
+			name:   "reset rejects trailing dot alias",
+			method: http.MethodPost,
+			target: "/internal/workspaces/ws-123./reset",
+		},
+		{
+			name:   "commands rejects encoded trailing space",
+			method: http.MethodPost,
+			target: "/internal/workspaces/ws-123%20/commands",
+			body:   `{"command":"git status --short"}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

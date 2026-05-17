@@ -33,6 +33,10 @@ export function TerminalPanel({
   terminal,
 }: TerminalPanelProps) {
   const lines = preview ? previewLines : terminal.transcript;
+  const showReconnect =
+    !preview &&
+    terminal.terminalUrl &&
+    (terminal.status === "unavailable" || terminal.status === "error");
   const emptyMessage = terminal.error
     ? terminal.error
     : terminal.status === "connecting"
@@ -62,6 +66,11 @@ export function TerminalPanel({
         <div className="panel-footnote">
           <span>Transport</span>
           <code>{terminal.terminalUrl}</code>
+          {showReconnect ? (
+            <button className="top-bar-button" onClick={terminal.reconnect} type="button">
+              Reconnect
+            </button>
+          ) : null}
         </div>
       ) : null}
     </section>
