@@ -111,6 +111,29 @@ func TestDefaultRouterUsesTestAuthStoreBeforeMySQLOpen(t *testing.T) {
 	}
 }
 
+func TestDefaultRouterReturnsServiceUnavailableWhenMySQLAuthInitFails(t *testing.T) {
+	restoreFactory := httpx.SetDefaultAuthStoreFactoryForTests(nil)
+	t.Cleanup(restoreFactory)
+	t.Setenv("MYSQL_DSN", "user:pass@tcp(127.0.0.1:3306)/gitgym")
+
+	restoreOpenMySQL := httpx.SetOpenMySQLFuncForTests(func(string) (service.UserStore, error) {
+		return nil, errors.New("mysql unavailable")
+	})
+	t.Cleanup(restoreOpenMySQL)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "auth initialization failed") {
+		t.Fatalf("expected init failure body, got %q", rec.Body.String())
+	}
+}
+
 func TestGitHubLoginReturnsServerErrorWhenOAuthConfigIncomplete(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/github/login", nil)
 	rec := httptest.NewRecorder()
@@ -127,6 +150,28 @@ func TestGitHubLoginReturnsServerErrorWhenOAuthConfigIncomplete(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "not configured") {
 		t.Fatalf("expected clear configuration error, got %q", rec.Body.String())
+	}
+}
+
+func TestLoadRuntimeDefaultsFrontendRedirectForLoopbackAPI(t *testing.T) {
+	t.Setenv("API_BASE_URL", "http://127.0.0.1:8080")
+	t.Setenv("FRONTEND_REDIRECT_URL", "")
+
+	cfg := config.LoadRuntime()
+
+	if cfg.FrontendRedirectURL != "http://127.0.0.1:5173" {
+		t.Fatalf("expected local frontend redirect default, got %q", cfg.FrontendRedirectURL)
+	}
+}
+
+func TestLoadRuntimeDoesNotDefaultFrontendRedirectForNonLocalAPI(t *testing.T) {
+	t.Setenv("API_BASE_URL", "https://api.gitgym.example")
+	t.Setenv("FRONTEND_REDIRECT_URL", "")
+
+	cfg := config.LoadRuntime()
+
+	if cfg.FrontendRedirectURL != "" {
+		t.Fatalf("expected blank frontend redirect for non-local api, got %q", cfg.FrontendRedirectURL)
 	}
 }
 
@@ -410,6 +455,32 @@ func TestLogoutRequiresRealSession(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestLogoutClearsStaleCookieWithoutPersistedSession(t *testing.T) {
+	restore := httpx.SetDefaultAuthStoreFactoryForTests(nil)
+	t.Cleanup(restore)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "stale-token"})
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d with body %s", rec.Code, rec.Body.String())
+	}
+
+	var clearedCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "gitgym_session" {
+			clearedCookie = cookie
+			break
+		}
+	}
+	if clearedCookie == nil || clearedCookie.MaxAge >= 0 {
+		t.Fatalf("expected stale session cookie to be cleared, got %#v", clearedCookie)
 	}
 }
 

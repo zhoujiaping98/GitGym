@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -113,11 +112,6 @@ func AuthMe(authStore service.UserStore) http.HandlerFunc {
 
 		user, err := authStore.GetUserByID(r.Context(), authenticatedSession.UserID)
 		if err != nil {
-			if errors.Is(err, service.ErrBrowserSessionNotFound) {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-
 			http.Error(w, "failed to load current user", http.StatusInternalServerError)
 			return
 		}

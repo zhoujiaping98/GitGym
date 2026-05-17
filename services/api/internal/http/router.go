@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -18,10 +19,11 @@ import (
 )
 
 type Dependencies struct {
-	PracticeService   service.PracticeService
-	AuthStore         service.UserStore
-	AuthConfig        config.Config
-	GitHubOAuthClient oauth.GitHubOAuthClient
+	PracticeService     service.PracticeService
+	AuthStore           service.UserStore
+	AuthConfig          config.Config
+	GitHubOAuthClient   oauth.GitHubOAuthClient
+	InitializationError error
 }
 
 var (
@@ -33,6 +35,9 @@ var (
 
 func NewRouter(deps ...Dependencies) http.Handler {
 	dependencies := mergeDependencies(defaultDependencies(), deps...)
+	if dependencies.InitializationError != nil {
+		return newInitializationErrorRouter(dependencies.InitializationError)
+	}
 	if dependencies.GitHubOAuthClient == nil {
 		dependencies.GitHubOAuthClient = oauth.NewGitHubOAuthClient(
 			dependencies.AuthConfig.GitHubClientID,
@@ -47,11 +52,11 @@ func NewRouter(deps ...Dependencies) http.Handler {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/auth/github/login", handlers.GitHubLogin(dependencies.GitHubOAuthClient))
 		r.Get("/auth/github/callback", handlers.GitHubCallback(dependencies.GitHubOAuthClient, dependencies.AuthStore, dependencies.AuthConfig.FrontendRedirectURL))
+		r.Post("/auth/logout", handlers.Logout(dependencies.AuthStore))
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireSessionCookie(dependencies.AuthStore))
 			r.Get("/auth/me", handlers.AuthMe(dependencies.AuthStore))
-			r.Post("/auth/logout", handlers.Logout(dependencies.AuthStore))
 			r.Get("/templates", handlers.ListPracticeTemplates(dependencies.PracticeService))
 			r.Get("/practice-sessions/current", handlers.GetCurrentPracticeSession(dependencies.PracticeService))
 			r.Post("/practice-sessions", handlers.CreatePracticeSession(dependencies.PracticeService))
@@ -64,6 +69,7 @@ func NewRouter(deps ...Dependencies) http.Handler {
 
 func defaultDependencies() Dependencies {
 	authConfig := config.LoadRuntime()
+	authStore, initErr := defaultAuthStore(authConfig.MySQLDSN)
 
 	return Dependencies{
 		PracticeService: service.NewPracticeService(
@@ -71,8 +77,9 @@ func defaultDependencies() Dependencies {
 			runner.NewClient(os.Getenv("RUNNER_BASE_URL"), http.DefaultClient),
 			time.Now,
 		),
-		AuthStore:  defaultAuthStore(authConfig.MySQLDSN),
-		AuthConfig: authConfig,
+		AuthStore:           authStore,
+		AuthConfig:          authConfig,
+		InitializationError: initErr,
 	}
 }
 
@@ -87,6 +94,7 @@ func mergeDependencies(base Dependencies, overrides ...Dependencies) Dependencie
 	}
 	if override.AuthStore != nil {
 		base.AuthStore = override.AuthStore
+		base.InitializationError = nil
 	}
 	if override.GitHubOAuthClient != nil {
 		base.GitHubOAuthClient = override.GitHubOAuthClient
@@ -124,20 +132,22 @@ func authCallbackURL(apiBaseURL string) string {
 	return strings.TrimRight(apiBaseURL, "/") + "/api/v1/auth/github/callback"
 }
 
-func defaultAuthStore(mysqlDSN string) service.UserStore {
+func defaultAuthStore(mysqlDSN string) (service.UserStore, error) {
 	defaultAuthStoreFactoryForTestsMu.RLock()
 	factory := defaultAuthStoreFactoryForTests
 	defaultAuthStoreFactoryForTestsMu.RUnlock()
 	if factory != nil {
-		return factory()
+		return factory(), nil
 	}
 
 	if strings.TrimSpace(mysqlDSN) != "" {
-		if authStore, err := openMySQLStore(mysqlDSN); err == nil {
-			return authStore
+		authStore, err := openMySQLStore(mysqlDSN)
+		if err != nil {
+			return nil, fmt.Errorf("auth initialization failed: %w", err)
 		}
+		return authStore, nil
 	}
-	return nil
+	return nil, nil
 }
 
 func SetDefaultAuthStoreFactoryForTests(factory func() service.UserStore) func() {
@@ -179,4 +189,19 @@ func openMySQLStore(mysqlDSN string) (service.UserStore, error) {
 		return nil, err
 	}
 	return store.NewMySQLStore(db), nil
+}
+
+func newInitializationErrorRouter(initErr error) http.Handler {
+	r := chi.NewRouter()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, initErr.Error(), http.StatusServiceUnavailable)
+	})
+
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+	})
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Mount("/", handler)
+	})
+	return r
 }
