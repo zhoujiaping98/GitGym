@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 
 	"gitgym/services/api/internal/domain"
 )
+
+var ErrBrowserSessionNotFound = errors.New("browser session not found")
 
 type GitHubProfile struct {
 	ID        uint64

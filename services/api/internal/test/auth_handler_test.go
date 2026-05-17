@@ -1,6 +1,8 @@
 package test
 
 import (
+	"database/sql"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -120,5 +122,13 @@ func TestBrowserSessionLookupQueryRequiresUnrevokedAndUnexpiredSession(t *testin
 	}
 	if !strings.Contains(query, "expires_at > UTC_TIMESTAMP(6)") {
 		t.Fatalf("expected expiry guard in query, got %q", query)
+	}
+}
+
+func TestBrowserSessionLookupErrorMapsNoRowsToStableNotFound(t *testing.T) {
+	err := store.MapBrowserSessionLookupErrorForTest(sql.ErrNoRows)
+
+	if !errors.Is(err, service.ErrBrowserSessionNotFound) {
+		t.Fatalf("expected browser session not found, got %v", err)
 	}
 }

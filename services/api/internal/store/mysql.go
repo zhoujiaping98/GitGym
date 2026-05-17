@@ -115,7 +115,7 @@ func (s *MySQLStore) GetBrowserSessionByTokenHash(ctx context.Context, tokenHash
 		&session.ExpiresAt,
 		&revokedAt,
 	); err != nil {
-		return domain.BrowserSession{}, fmt.Errorf("get browser session by token hash: %w", err)
+		return domain.BrowserSession{}, mapBrowserSessionLookupError(err)
 	}
 
 	session.UserAgent = nullStringPtr(userAgent)
@@ -133,6 +133,10 @@ func (s *MySQLStore) RevokeBrowserSession(ctx context.Context, tokenHash string)
 
 func BrowserSessionLookupQueryForTest() string {
 	return browserSessionLookupQuery
+}
+
+func MapBrowserSessionLookupErrorForTest(err error) error {
+	return mapBrowserSessionLookupError(err)
 }
 
 func scanCurrentUser(row *sql.Row) (domain.CurrentUser, error) {
@@ -178,4 +182,14 @@ func nullTimePtr(value sql.NullTime) *time.Time {
 	}
 	t := value.Time
 	return &t
+}
+
+func mapBrowserSessionLookupError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if err == sql.ErrNoRows {
+		return service.ErrBrowserSessionNotFound
+	}
+	return fmt.Errorf("get browser session by token hash: %w", err)
 }
