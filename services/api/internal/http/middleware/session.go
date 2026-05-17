@@ -24,17 +24,18 @@ type AuthenticatedSession struct {
 func RequireSessionCookie(authStore service.UserStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if devAuthBypassEnabled() && requestFromLoopback(r) {
+				session := AuthenticatedSession{
+					UserID:       defaultAuthenticatedUserID,
+					SessionToken: "dev-auth-bypass",
+				}
+				ctx := context.WithValue(r.Context(), authenticatedSessionKey{}, session)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
 			cookie, err := r.Cookie("gitgym_session")
 			if err != nil || cookie.Value == "" {
-				if devAuthBypassEnabled() && requestFromLoopback(r) {
-					session := AuthenticatedSession{
-						UserID:       defaultAuthenticatedUserID,
-						SessionToken: "dev-auth-bypass",
-					}
-					ctx := context.WithValue(r.Context(), authenticatedSessionKey{}, session)
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
-				}
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}

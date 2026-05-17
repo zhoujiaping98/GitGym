@@ -15,24 +15,6 @@ const (
 	browserSessionCookieName = "gitgym_session"
 )
 
-func GitHubLogin(gitHubOAuthClient oauth.GitHubOAuthClient) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := requireOAuthFlowReady(gitHubOAuthClient, nil, ""); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		state, err := service.NewSessionToken()
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-
-		setOAuthStateCookie(w, state, shouldUseSecureCookies(r))
-		http.Redirect(w, r, gitHubOAuthClient.AuthCodeURL(state), http.StatusTemporaryRedirect)
-	}
-}
-
 func GitHubLoginWithReadiness(gitHubOAuthClient oauth.GitHubOAuthClient, authStore service.UserStore, frontendRedirectURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := requireOAuthFlowReady(gitHubOAuthClient, authStore, frontendRedirectURL); err != nil {
@@ -235,7 +217,11 @@ func shouldUseSecureCookies(r *http.Request) bool {
 	}
 
 	forwardedProto := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]))
-	return forwardedProto == "https"
+	if forwardedProto == "https" {
+		return true
+	}
+
+	return !isLocalRequestHost(requestHost(r))
 }
 
 type errString string
@@ -255,4 +241,27 @@ func clientIP(r *http.Request) string {
 		return strings.TrimSpace(r.RemoteAddr)
 	}
 	return host
+}
+
+func requestHost(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if host := strings.TrimSpace(r.URL.Hostname()); host != "" {
+		return host
+	}
+	host := strings.TrimSpace(r.Host)
+	parsedHost, _, err := net.SplitHostPort(host)
+	if err == nil {
+		return parsedHost
+	}
+	return host
+}
+
+func isLocalRequestHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && ip.IsLoopback()
 }

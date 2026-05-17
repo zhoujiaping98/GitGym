@@ -16,6 +16,7 @@ import (
 	"gitgym/services/api/internal/config"
 	"gitgym/services/api/internal/domain"
 	httpx "gitgym/services/api/internal/http"
+	"gitgym/services/api/internal/http/middleware"
 	"gitgym/services/api/internal/service"
 	"gitgym/services/api/internal/store"
 	mysql "github.com/go-sql-driver/mysql"
@@ -172,6 +173,69 @@ func TestGitHubLoginSetsSecureOAuthStateCookieForHTTPSRequests(t *testing.T) {
 	}
 	if !stateCookie.Secure {
 		t.Fatalf("expected oauth state cookie to be secure")
+	}
+}
+
+func TestGitHubLoginSetsSecureOAuthStateCookieForNonLocalHTTPRequestsWithoutProxyHeaders(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://api.gitgym.example/api/v1/auth/github/login", nil)
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter(httpx.Dependencies{
+		AuthStore: &stubUserStore{},
+		AuthConfig: config.Config{
+			GitHubClientID:      "client-id",
+			GitHubSecret:        "client-secret",
+			APIBaseURL:          "https://api.gitgym.example",
+			FrontendRedirectURL: "https://app.gitgym.example",
+		},
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307, got %d", rec.Code)
+	}
+
+	var stateCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "gitgym_oauth_state" {
+			stateCookie = cookie
+			break
+		}
+	}
+	if stateCookie == nil || !stateCookie.Secure {
+		t.Fatalf("expected secure oauth state cookie, got %#v", stateCookie)
+	}
+}
+
+func TestGitHubLoginKeepsOAuthStateCookieNonSecureForLocalHTTPRequests(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/v1/auth/github/login", nil)
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter(httpx.Dependencies{
+		AuthStore: &stubUserStore{},
+		AuthConfig: config.Config{
+			GitHubClientID:      "client-id",
+			GitHubSecret:        "client-secret",
+			APIBaseURL:          "http://127.0.0.1:8080",
+			FrontendRedirectURL: "http://127.0.0.1:5173",
+		},
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307, got %d", rec.Code)
+	}
+
+	var stateCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "gitgym_oauth_state" {
+			stateCookie = cookie
+			break
+		}
+	}
+	if stateCookie == nil {
+		t.Fatalf("expected oauth state cookie")
+	}
+	if stateCookie.Secure {
+		t.Fatalf("expected local oauth state cookie to remain non-secure")
 	}
 }
 
@@ -462,6 +526,56 @@ func TestGitHubCallbackSetsSecureCookiesForHTTPSRequests(t *testing.T) {
 	}
 }
 
+func TestGitHubCallbackSetsSecureCookiesForNonLocalHTTPRequestsWithoutProxyHeaders(t *testing.T) {
+	authStore := &stubUserStore{
+		userByGitHubID: map[uint64]domain.CurrentUser{
+			123: {ID: 7, GitHubID: 123, GitHubLogin: "octocat", DisplayName: "The Octocat"},
+		},
+	}
+	oauthClient := &stubGitHubOAuthClient{
+		exchangeCodeFunc: func(code string) (string, error) { return "access-token", nil },
+		fetchProfileFunc: func(accessToken string) (service.GitHubProfile, error) {
+			return service.GitHubProfile{ID: 123, Login: "octocat", Name: "The Octocat", Email: "octo@example.com"}, nil
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://api.gitgym.example/api/v1/auth/github/callback?code=abc123&state=expected-state", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_oauth_state", Value: "expected-state"})
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter(httpx.Dependencies{
+		AuthStore:         authStore,
+		GitHubOAuthClient: oauthClient,
+		AuthConfig: config.Config{
+			GitHubClientID:      "client-id",
+			GitHubSecret:        "client-secret",
+			APIBaseURL:          "https://api.gitgym.example",
+			FrontendRedirectURL: "https://app.gitgym.example",
+		},
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307, got %d with body %s", rec.Code, rec.Body.String())
+	}
+
+	var sessionCookie *http.Cookie
+	var clearedStateCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		switch cookie.Name {
+		case "gitgym_session":
+			sessionCookie = cookie
+		case "gitgym_oauth_state":
+			clearedStateCookie = cookie
+		}
+	}
+	if sessionCookie == nil || !sessionCookie.Secure {
+		t.Fatalf("expected secure session cookie, got %#v", sessionCookie)
+	}
+	if clearedStateCookie == nil || !clearedStateCookie.Secure {
+		t.Fatalf("expected secure cleared oauth state cookie, got %#v", clearedStateCookie)
+	}
+}
+
 func TestAuthMeReturnsUnauthorizedWithoutPersistedSession(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
 	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "raw-token"})
@@ -510,6 +624,32 @@ func TestAuthMeDefaultRouterReturnsServerErrorWithoutAuthBacking(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "not configured") {
 		t.Fatalf("expected clear configuration error, got %q", rec.Body.String())
+	}
+}
+
+func TestRequireSessionCookieAllowsLoopbackDevBypassWithStaleSessionCookie(t *testing.T) {
+	t.Setenv("DEV_AUTH_BYPASS", "true")
+
+	protected := middleware.RequireSessionCookie(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session, ok := middleware.AuthenticatedSessionFromContext(r.Context())
+		if !ok {
+			t.Fatalf("expected authenticated session in context")
+		}
+		if session.UserID != 1 || session.SessionToken != "dev-auth-bypass" {
+			t.Fatalf("unexpected bypass session: %+v", session)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.RemoteAddr = "127.0.0.1:45678"
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "stale-token"})
+	rec := httptest.NewRecorder()
+
+	protected.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected bypass to allow request, got %d with body %s", rec.Code, rec.Body.String())
 	}
 }
 
