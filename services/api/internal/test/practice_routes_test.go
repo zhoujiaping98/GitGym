@@ -20,8 +20,6 @@ import (
 )
 
 func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
-	t.Parallel()
-
 	router := httpx.NewRouter(httpx.Dependencies{
 		PracticeService: &stubPracticeService{},
 	})
@@ -79,6 +77,45 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("expected 401, got %d", rec.Code)
+		}
+	})
+
+	t.Run("dev auth bypass allows local requests without cookie", func(t *testing.T) {
+		t.Setenv("DEV_AUTH_BYPASS", "true")
+
+		createReq := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":7,"template_id":1}`))
+		createReq.Header.Set("Content-Type", "application/json")
+		createReq.RemoteAddr = "127.0.0.1:45678"
+		createRec := httptest.NewRecorder()
+
+		router.ServeHTTP(createRec, createReq)
+
+		if createRec.Code != http.StatusCreated {
+			t.Fatalf("expected 201 with dev auth bypass, got %d with body %s", createRec.Code, createRec.Body.String())
+		}
+
+		currentReq := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/current", nil)
+		currentReq.RemoteAddr = "127.0.0.1:45678"
+		currentRec := httptest.NewRecorder()
+
+		router.ServeHTTP(currentRec, currentReq)
+
+		if currentRec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 current session with dev auth bypass, got %d", currentRec.Code)
+		}
+	})
+
+	t.Run("dev auth bypass does not apply to non-loopback requests", func(t *testing.T) {
+		t.Setenv("DEV_AUTH_BYPASS", "true")
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/current", nil)
+		req.RemoteAddr = "10.24.8.9:45678"
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for non-loopback bypass request, got %d", rec.Code)
 		}
 	})
 
