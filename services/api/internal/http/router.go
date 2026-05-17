@@ -50,7 +50,7 @@ func NewRouter(deps ...Dependencies) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/healthz", handlers.Health())
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Get("/auth/github/login", handlers.GitHubLogin(dependencies.GitHubOAuthClient))
+		r.Get("/auth/github/login", handlers.GitHubLoginWithReadiness(dependencies.GitHubOAuthClient, dependencies.AuthStore, dependencies.AuthConfig.FrontendRedirectURL))
 		r.Get("/auth/github/callback", handlers.GitHubCallback(dependencies.GitHubOAuthClient, dependencies.AuthStore, dependencies.AuthConfig.FrontendRedirectURL))
 		r.Post("/auth/logout", handlers.Logout(dependencies.AuthStore))
 

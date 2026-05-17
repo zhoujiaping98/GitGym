@@ -17,8 +17,8 @@ const (
 
 func GitHubLogin(gitHubOAuthClient oauth.GitHubOAuthClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if gitHubOAuthClient == nil {
-			http.Error(w, "github oauth is not configured", http.StatusInternalServerError)
+		if err := requireOAuthFlowReady(gitHubOAuthClient, nil, ""); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -28,19 +28,33 @@ func GitHubLogin(gitHubOAuthClient oauth.GitHubOAuthClient) http.HandlerFunc {
 			return
 		}
 
-		setOAuthStateCookie(w, state)
+		setOAuthStateCookie(w, state, shouldUseSecureCookies(r))
+		http.Redirect(w, r, gitHubOAuthClient.AuthCodeURL(state), http.StatusTemporaryRedirect)
+	}
+}
+
+func GitHubLoginWithReadiness(gitHubOAuthClient oauth.GitHubOAuthClient, authStore service.UserStore, frontendRedirectURL string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := requireOAuthFlowReady(gitHubOAuthClient, authStore, frontendRedirectURL); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		state, err := service.NewSessionToken()
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		setOAuthStateCookie(w, state, shouldUseSecureCookies(r))
 		http.Redirect(w, r, gitHubOAuthClient.AuthCodeURL(state), http.StatusTemporaryRedirect)
 	}
 }
 
 func GitHubCallback(gitHubOAuthClient oauth.GitHubOAuthClient, authStore service.UserStore, frontendRedirectURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if gitHubOAuthClient == nil || authStore == nil {
-			http.Error(w, "github oauth is not configured", http.StatusInternalServerError)
-			return
-		}
-		if strings.TrimSpace(frontendRedirectURL) == "" {
-			http.Error(w, "frontend redirect is not configured", http.StatusInternalServerError)
+		if err := requireOAuthFlowReady(gitHubOAuthClient, authStore, frontendRedirectURL); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -90,8 +104,9 @@ func GitHubCallback(gitHubOAuthClient oauth.GitHubOAuthClient, authStore service
 			return
 		}
 
-		setBrowserSessionCookie(w, rawToken)
-		clearOAuthStateCookie(w)
+		secureCookies := shouldUseSecureCookies(r)
+		setBrowserSessionCookie(w, rawToken, secureCookies)
+		clearOAuthStateCookie(w, secureCookies)
 		http.Redirect(w, r, frontendRedirectURL, http.StatusTemporaryRedirect)
 	}
 }
@@ -137,7 +152,7 @@ func Logout(authStore service.UserStore) http.HandlerFunc {
 			return
 		}
 
-		clearBrowserSessionCookie(w)
+		clearBrowserSessionCookie(w, shouldUseSecureCookies(r))
 
 		if authStore == nil {
 			http.Error(w, "auth store is not configured", http.StatusInternalServerError)
@@ -151,47 +166,82 @@ func Logout(authStore service.UserStore) http.HandlerFunc {
 	}
 }
 
-func setOAuthStateCookie(w http.ResponseWriter, state string) {
+func setOAuthStateCookie(w http.ResponseWriter, state string, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     oauthStateCookieName,
 		Value:    state,
 		Path:     "/",
+		Secure:   secure,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   300,
 	})
 }
 
-func clearOAuthStateCookie(w http.ResponseWriter) {
+func clearOAuthStateCookie(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     oauthStateCookieName,
 		Value:    "",
 		Path:     "/",
+		Secure:   secure,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
 }
 
-func setBrowserSessionCookie(w http.ResponseWriter, token string) {
+func setBrowserSessionCookie(w http.ResponseWriter, token string, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     browserSessionCookieName,
 		Value:    token,
 		Path:     "/",
+		Secure:   secure,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
 
-func clearBrowserSessionCookie(w http.ResponseWriter) {
+func clearBrowserSessionCookie(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     browserSessionCookieName,
 		Value:    "",
 		Path:     "/",
+		Secure:   secure,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
+}
+
+func requireOAuthFlowReady(gitHubOAuthClient oauth.GitHubOAuthClient, authStore service.UserStore, frontendRedirectURL string) error {
+	if gitHubOAuthClient == nil {
+		return errString("github oauth is not configured")
+	}
+	if authStore == nil {
+		return errString("auth store is not configured")
+	}
+	if strings.TrimSpace(frontendRedirectURL) == "" {
+		return errString("frontend redirect is not configured")
+	}
+	return nil
+}
+
+func shouldUseSecureCookies(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+
+	forwardedProto := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]))
+	return forwardedProto == "https"
+}
+
+type errString string
+
+func (e errString) Error() string {
+	return string(e)
 }
 
 func clientIP(r *http.Request) string {
