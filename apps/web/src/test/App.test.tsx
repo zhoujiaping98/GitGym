@@ -42,6 +42,19 @@ const nextSession = {
   lastActivityAt: "2026-05-16T10:10:00.000Z",
 } as const;
 
+const mismatchedSession = {
+  id: 99,
+  userId: 7,
+  scenarioId: 9,
+  templateId: 1,
+  runnerRef: "runner-99",
+  workspacePath: "/tmp/gitgym/session-99",
+  status: "active",
+  startedAt: "2026-05-16T10:20:00.000Z",
+  expiresAt: "2026-05-16T12:20:00.000Z",
+  lastActivityAt: "2026-05-16T10:20:00.000Z",
+} as const;
+
 beforeEach(() => {
   mockUseCurrentSession.mockReset();
   mockUseTerminalSession.mockReset();
@@ -50,7 +63,7 @@ beforeEach(() => {
     status: "ready",
     session: null,
     error: null,
-    refresh: vi.fn(),
+    refresh: vi.fn().mockResolvedValue(null),
   });
 
   mockUseTerminalSession.mockReturnValue({
@@ -94,7 +107,7 @@ describe("App", () => {
       status: "loading",
       session: null,
       error: null,
-      refresh: vi.fn(),
+      refresh: vi.fn().mockResolvedValue(null),
     });
 
     render(<App />);
@@ -107,7 +120,7 @@ describe("App", () => {
   });
 
   it("renders a retryable error shell when current session lookup fails", () => {
-    const refresh = vi.fn();
+    const refresh = vi.fn().mockResolvedValue(null);
 
     mockUseCurrentSession.mockReturnValue({
       status: "error",
@@ -128,7 +141,7 @@ describe("App", () => {
   });
 
   it("renders the live workbench when there is an active session", async () => {
-    const refresh = vi.fn().mockResolvedValue(undefined);
+    const refresh = vi.fn().mockResolvedValue(nextSession);
     const reconnect = vi.fn();
 
     mockUseCurrentSession.mockReturnValue({
@@ -202,7 +215,7 @@ describe("App", () => {
       status: "ready",
       session: activeSession,
       error: null,
-      refresh: vi.fn().mockResolvedValue(undefined),
+      refresh: vi.fn().mockResolvedValue(activeSession),
     });
 
     mockUseTerminalSession.mockReturnValue({
@@ -220,5 +233,108 @@ describe("App", () => {
 
     expect(reconnect).toHaveBeenCalledTimes(1);
     expect(mockResetPracticeSession).not.toHaveBeenCalled();
+  });
+
+  it("reverts the optimistic new session and shows an error when refresh fails", async () => {
+    const refresh = vi.fn().mockRejectedValue(new Error("api offline"));
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      error: null,
+      refresh,
+    });
+
+    mockUseTerminalSession.mockReturnValue({
+      status: "ready",
+      transcript: [],
+      history: [],
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      error: null,
+      reconnect: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    await waitFor(() => {
+      expect(mockCreatePracticeSession).toHaveBeenCalledTimes(1);
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("runner-42")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("runner-43")).not.toBeInTheDocument();
+    expect(screen.getByText("Created a new session, but refreshing it failed: api offline")).toBeInTheDocument();
+  });
+
+  it("replaces the optimistic new session when refresh returns a different current session", async () => {
+    const refresh = vi.fn().mockResolvedValue(mismatchedSession);
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      error: null,
+      refresh,
+    });
+
+    mockUseTerminalSession.mockReturnValue({
+      status: "ready",
+      transcript: [],
+      history: [],
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      error: null,
+      reconnect: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("runner-99")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("runner-43")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Created session #43, but the server returned session #99."),
+    ).toBeInTheDocument();
+  });
+
+  it("surfaces a reset reconciliation error when refresh returns no current session", async () => {
+    const refresh = vi.fn().mockResolvedValue(null);
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      error: null,
+      refresh,
+    });
+
+    mockUseTerminalSession.mockReturnValue({
+      status: "ready",
+      transcript: [],
+      history: [],
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      error: null,
+      reconnect: vi.fn(),
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => {
+      expect(mockResetPracticeSession).toHaveBeenCalledWith(42);
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    expect(
+      screen.getByText("Reset completed, but the server did not return a current session."),
+    ).toBeInTheDocument();
   });
 });

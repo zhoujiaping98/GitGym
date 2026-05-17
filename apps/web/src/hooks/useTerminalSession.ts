@@ -13,6 +13,7 @@ export function useTerminalSession(
 ): TerminalSessionState {
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTokenRef = useRef(0);
+  const sessionId = session?.id ?? null;
   const [status, setStatus] = useState<TerminalSessionState["status"]>("idle");
   const [transcript, setTranscript] = useState<string[]>([]);
   const [history, setHistory] = useState<CommandHistoryEntry[]>([]);
@@ -112,7 +113,7 @@ export function useTerminalSession(
       }
       socket.close();
     };
-  }, [session, reconnectCount]);
+  }, [reconnectCount, sessionId]);
 
   return {
     status,

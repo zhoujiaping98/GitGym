@@ -7,31 +7,33 @@ export function useCurrentSession(): CurrentSessionState {
   const [session, setSession] = useState<PracticeSession | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function load(signal?: AbortSignal) {
+  async function load(signal?: AbortSignal): Promise<PracticeSession | null> {
     setError(null);
 
     try {
       const currentSession = await fetchCurrentSession(signal);
       setSession(currentSession);
       setStatus("ready");
+      return currentSession;
     } catch (loadError) {
       if (signal?.aborted) {
-        return;
+        return null;
       }
 
       setSession(null);
       setStatus("error");
-      setError(
+      const nextError =
         loadError instanceof Error
           ? loadError.message
-          : "Unable to load current session.",
-      );
+          : "Unable to load current session.";
+      setError(nextError);
+      throw loadError instanceof Error ? loadError : new Error(nextError);
     }
   }
 
   useEffect(() => {
     const controller = new AbortController();
-    void load(controller.signal);
+    void load(controller.signal).catch(() => undefined);
     return () => controller.abort();
   }, []);
 
@@ -41,7 +43,7 @@ export function useCurrentSession(): CurrentSessionState {
     error,
     refresh: async () => {
       setStatus("loading");
-      await load();
+      return load();
     },
   };
 }

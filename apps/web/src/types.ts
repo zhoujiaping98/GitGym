@@ -16,7 +16,7 @@ export type CurrentSessionState = {
   status: "loading" | "ready" | "error";
   session: PracticeSession | null;
   error: string | null;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<PracticeSession | null>;
 };
 
 export type CommandHistoryEntry = {

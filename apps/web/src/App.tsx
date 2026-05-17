@@ -70,6 +70,48 @@ export default function App() {
     }
   }, [currentSession.session, currentSession.status, sessionOverride]);
 
+  async function reconcileSessionAction(
+    action: "reset" | "new-session",
+    expectedSessionId: number,
+  ) {
+    try {
+      const refreshedSession = await currentSession.refresh();
+
+      if (!refreshedSession) {
+        setSessionOverride(null);
+        setActionError(
+          action === "new-session"
+            ? "Created a new session, but the server did not return it as current."
+            : "Reset completed, but the server did not return a current session.",
+        );
+        return;
+      }
+
+      if (refreshedSession.id !== expectedSessionId) {
+        setSessionOverride(refreshedSession);
+        setActionError(
+          action === "new-session"
+            ? `Created session #${expectedSessionId}, but the server returned session #${refreshedSession.id}.`
+            : `Reset session #${expectedSessionId}, but the server returned session #${refreshedSession.id}.`,
+        );
+        return;
+      }
+
+      setActionError(null);
+    } catch (error) {
+      setSessionOverride(null);
+      setActionError(
+        `${
+          action === "new-session"
+            ? "Created a new session"
+            : "Reset completed"
+        }, but refreshing it failed: ${
+          error instanceof Error ? error.message : "Unable to refresh the current session."
+        }`,
+      );
+    }
+  }
+
   const topBarActions = hasActiveSession
     ? [
         {
@@ -88,7 +130,7 @@ export default function App() {
             })
               .then((nextSession) => {
                 setSessionOverride(nextSession);
-                void currentSession.refresh().catch(() => undefined);
+                return reconcileSessionAction("new-session", nextSession.id);
               })
               .catch((error: unknown) => {
                 setActionError(
@@ -113,7 +155,7 @@ export default function App() {
             setPendingAction("reset");
             void resetPracticeSession(session.id)
               .then(() => {
-                void currentSession.refresh().catch(() => undefined);
+                return reconcileSessionAction("reset", session.id);
               })
               .catch((error: unknown) => {
                 setActionError(
@@ -172,15 +214,20 @@ export default function App() {
           title="Checking session"
           body="Restoring your practice workbench."
         />
-      ) : currentSession.status === "error" ? (
+      ) : currentSession.status === "error" || actionError ? (
         <AppStateShell
-          eyebrow="Session lookup"
+          eyebrow={actionError ? "Session reconciliation" : "Session lookup"}
           title="Session unavailable"
-          body="We could not restore your current practice session."
-          detail={currentSession.error}
+          body={
+            actionError
+              ? "We could not reconcile your current practice session."
+              : "We could not restore your current practice session."
+          }
+          detail={actionError ?? currentSession.error}
           actionLabel="Try again"
           onAction={() => {
-            void currentSession.refresh();
+            setActionError(null);
+            void currentSession.refresh().catch(() => undefined);
           }}
         />
       ) : (

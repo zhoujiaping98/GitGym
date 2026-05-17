@@ -85,4 +85,45 @@ describe("useTerminalSession", () => {
     expect(result.current.history).toEqual([]);
     expect(result.current.error).toBe("Terminal transport is unavailable for this session.");
   });
+
+  it("preserves terminal state when the session object changes but the id stays the same", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result, rerender } = renderHook(
+      ({ session }: { session: PracticeSession | null }) => useTerminalSession(session),
+      {
+        initialProps: {
+          session: activeSession,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+
+    MockWebSocket.instances[0].emit("open");
+    MockWebSocket.instances[0].emit("message", {
+      data: "$ git status",
+    } as MessageEvent);
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("ready");
+      expect(result.current.transcript).toEqual(["$ git status"]);
+    });
+
+    rerender({
+      session: {
+        ...activeSession,
+        runnerRef: "runner-42-updated",
+      },
+    });
+
+    await waitFor(() => {
+      expect(result.current.transcript).toEqual(["$ git status"]);
+    });
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(result.current.status).toBe("ready");
+  });
 });

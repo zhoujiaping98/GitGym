@@ -157,4 +157,80 @@ test.describe("GitGym shell", () => {
       page.getByRole("link", { name: "Continue with GitHub" }),
     ).toHaveCount(0);
   });
+
+  test("shows a reconciliation error when a new session cannot be confirmed", async ({
+    page,
+  }) => {
+    let currentSessionCalls = 0;
+
+    await page.route("**/api/v1/practice-sessions/current", async (route) => {
+      currentSessionCalls += 1;
+
+      if (currentSessionCalls === 1) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            session: {
+              id: 42,
+              user_id: 7,
+              scenario_id: 9,
+              template_id: 1,
+              runner_ref: "runner-42",
+              workspace_path: "/tmp/gitgym/session-42",
+              status: "active",
+              started_at: "2026-05-16T10:00:00.000Z",
+              expires_at: "2026-05-16T12:00:00.000Z",
+              last_activity_at: "2026-05-16T10:05:00.000Z",
+            },
+          }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "not found" }),
+      });
+    });
+
+    await page.route("**/api/v1/practice-sessions", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          session: {
+            id: 43,
+            user_id: 7,
+            scenario_id: 9,
+            template_id: 1,
+            runner_ref: "runner-43",
+            workspace_path: "/tmp/gitgym/session-43",
+            status: "active",
+            started_at: "2026-05-16T10:10:00.000Z",
+            expires_at: "2026-05-16T12:10:00.000Z",
+            last_activity_at: "2026-05-16T10:10:00.000Z",
+          },
+        }),
+      });
+    });
+
+    await page.goto("/");
+    await expect(page.getByText("runner-42")).toBeVisible();
+
+    await page.getByRole("button", { name: "New Session" }).click();
+
+    await expect(page.getByText("Session unavailable")).toBeVisible();
+    await expect(
+      page.getByText("Created a new session, but the server did not return it as current."),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+    await expect(page.getByText("runner-43")).toHaveCount(0);
+  });
 });
