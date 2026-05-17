@@ -20,8 +20,10 @@ import (
 )
 
 func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
+	authStore := authStoreWithSession("persisted-route-token", 42)
 	router := httpx.NewRouter(httpx.Dependencies{
 		PracticeService: &stubPracticeService{},
+		AuthStore:       authStore,
 	})
 
 	t.Run("planned routes are mounted behind auth", func(t *testing.T) {
@@ -42,7 +44,7 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				req := httptest.NewRequest(tc.method, tc.target, bytes.NewReader(tc.body))
-				req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "session-token"})
+				req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "persisted-route-token"})
 				if len(tc.body) > 0 {
 					req.Header.Set("Content-Type", "application/json")
 				}
@@ -142,7 +144,7 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 
 		for _, tc := range cases {
 			req := httptest.NewRequest(tc.method, tc.target, nil)
-			req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "session-token"})
+			req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "persisted-route-token"})
 			rec := httptest.NewRecorder()
 
 			router.ServeHTTP(rec, req)
@@ -176,11 +178,12 @@ func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testi
 
 	router := httpx.NewRouter(httpx.Dependencies{
 		PracticeService: recordingService,
+		AuthStore:       authStoreWithSession("user-42-session-token", 42),
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"user_id":999,"scenario_id":7,"template_id":1}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "uid:42:session-token"})
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "user-42-session-token"})
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -188,8 +191,8 @@ func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testi
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d", rec.Code)
 	}
-	if recordingService.lastCreateInput.UserID != 1 {
-		t.Fatalf("expected handler to use placeholder authenticated user ID 1, got %d", recordingService.lastCreateInput.UserID)
+	if recordingService.lastCreateInput.UserID != 42 {
+		t.Fatalf("expected handler to use persisted authenticated user ID 42, got %d", recordingService.lastCreateInput.UserID)
 	}
 	if recordingService.lastCreateInput.ScenarioID != 7 {
 		t.Fatalf("expected scenario ID 7, got %d", recordingService.lastCreateInput.ScenarioID)
@@ -218,7 +221,7 @@ func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testi
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if payload.Session.ID != 101 || payload.Session.UserID != 1 {
+	if payload.Session.ID != 101 || payload.Session.UserID != 42 {
 		t.Fatalf("unexpected session payload: %+v", payload.Session)
 	}
 	if payload.Session.RunnerRef != "ws-123" || payload.Session.WorkspacePath != "/tmp/ws-123" {
@@ -244,7 +247,7 @@ func TestCurrentPracticeSessionReturnsStoredSession(t *testing.T) {
 	)
 
 	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
-		UserID:     1,
+		UserID:     42,
 		ScenarioID: 7,
 		TemplateID: 1,
 	})
@@ -254,10 +257,11 @@ func TestCurrentPracticeSessionReturnsStoredSession(t *testing.T) {
 
 	router := httpx.NewRouter(httpx.Dependencies{
 		PracticeService: practiceService,
+		AuthStore:       authStoreWithSession("current-session-token", 42),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/current", nil)
-	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "session-token"})
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "current-session-token"})
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -305,7 +309,7 @@ func TestPracticeTerminalWebsocketSeedsAndEchoesSession(t *testing.T) {
 	)
 
 	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
-		UserID:     1,
+		UserID:     42,
 		ScenarioID: 11,
 		TemplateID: 1,
 	})
@@ -315,6 +319,7 @@ func TestPracticeTerminalWebsocketSeedsAndEchoesSession(t *testing.T) {
 
 	server := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
 		PracticeService: practiceService,
+		AuthStore:       authStoreWithSession("terminal-session-token", 42),
 	}))
 	defer server.Close()
 
@@ -324,7 +329,7 @@ func TestPracticeTerminalWebsocketSeedsAndEchoesSession(t *testing.T) {
 		session.ID,
 	)
 	header := http.Header{}
-	header.Add("Cookie", "gitgym_session=session-token")
+	header.Add("Cookie", "gitgym_session=terminal-session-token")
 
 	conn, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{
 		HTTPHeader: header,
@@ -378,11 +383,12 @@ func TestCreatePracticeSessionMapsErrors(t *testing.T) {
 						return domain.PracticeSession{}, tc.err
 					},
 				},
+				AuthStore: authStoreWithSession("create-error-token", 42),
 			})
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":7,"template_id":1}`))
 			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "123"})
+			req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "create-error-token"})
 			rec := httptest.NewRecorder()
 
 			router.ServeHTTP(rec, req)
@@ -400,10 +406,11 @@ func TestResetPracticeSessionUsesAuthenticatedUser(t *testing.T) {
 	recordingService := &stubPracticeService{}
 	router := httpx.NewRouter(httpx.Dependencies{
 		PracticeService: recordingService,
+		AuthStore:       authStoreWithSession("reset-session-token", 42),
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions/321/reset", nil)
-	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "uid:42:session-token"})
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "reset-session-token"})
 	rec := httptest.NewRecorder()
 
 	router.ServeHTTP(rec, req)
@@ -411,8 +418,8 @@ func TestResetPracticeSessionUsesAuthenticatedUser(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d with body %s", rec.Code, rec.Body.String())
 	}
-	if recordingService.lastResetUserID != 1 {
-		t.Fatalf("expected handler to use placeholder authenticated user ID 1, got %d", recordingService.lastResetUserID)
+	if recordingService.lastResetUserID != 42 {
+		t.Fatalf("expected handler to use persisted authenticated user ID 42, got %d", recordingService.lastResetUserID)
 	}
 	if recordingService.lastResetSessionID != 321 {
 		t.Fatalf("expected session ID 321, got %d", recordingService.lastResetSessionID)
@@ -441,10 +448,11 @@ func TestResetPracticeSessionMapsErrors(t *testing.T) {
 						return tc.err
 					},
 				},
+				AuthStore: authStoreWithSession("reset-error-token", 42),
 			})
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions/123/reset", nil)
-			req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "123"})
+			req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "reset-error-token"})
 			rec := httptest.NewRecorder()
 
 			router.ServeHTTP(rec, req)
@@ -499,4 +507,17 @@ func (s *stubPracticeService) PracticeSessionByID(ctx context.Context, userID ui
 		return s.practiceSessionByIDFunc(ctx, userID, sessionID)
 	}
 	return domain.PracticeSession{}, service.ErrPracticeSessionNotFound
+}
+
+func authStoreWithSession(rawToken string, userID uint64) *stubUserStore {
+	return &stubUserStore{
+		sessionByTokenHash: map[string]domain.BrowserSession{
+			service.HashSessionToken(rawToken): {
+				ID:               1,
+				UserID:           userID,
+				SessionTokenHash: service.HashSessionToken(rawToken),
+				ExpiresAt:        time.Now().Add(24 * time.Hour).UTC(),
+			},
+		},
+	}
 }

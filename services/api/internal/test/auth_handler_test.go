@@ -781,6 +781,46 @@ func TestLogoutClearsStaleCookieWithoutPersistedSession(t *testing.T) {
 	}
 }
 
+func TestLogoutRevokesPersistedSessionAndClearsCookie(t *testing.T) {
+	rawToken := "persisted-session-token"
+	authStore := &stubUserStore{
+		sessionByTokenHash: map[string]domain.BrowserSession{
+			service.HashSessionToken(rawToken): {
+				ID:               17,
+				UserID:           42,
+				SessionTokenHash: service.HashSessionToken(rawToken),
+				ExpiresAt:        time.Now().Add(30 * time.Minute).UTC(),
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: rawToken})
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter(httpx.Dependencies{
+		AuthStore: authStore,
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d with body %s", rec.Code, rec.Body.String())
+	}
+	if authStore.revokedTokenHash != service.HashSessionToken(rawToken) {
+		t.Fatalf("expected revoke path to receive hashed cookie token %q, got %q", service.HashSessionToken(rawToken), authStore.revokedTokenHash)
+	}
+
+	var clearedCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "gitgym_session" {
+			clearedCookie = cookie
+			break
+		}
+	}
+	if clearedCookie == nil || clearedCookie.MaxAge >= 0 {
+		t.Fatalf("expected persisted session cookie to be cleared, got %#v", clearedCookie)
+	}
+}
+
 func TestLogoutReturnsServerErrorWhenAuthStoreUnavailableButClearsCookie(t *testing.T) {
 	restore := httpx.SetDefaultAuthStoreFactoryForTests(nil)
 	t.Cleanup(restore)
