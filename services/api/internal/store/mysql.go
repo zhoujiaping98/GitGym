@@ -11,6 +11,34 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
+const (
+	upsertGitHubUserQuery = `
+INSERT INTO users (github_user_id, github_login, display_name, avatar_url, email, last_login_at)
+VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(6))
+ON DUPLICATE KEY UPDATE
+  github_login = VALUES(github_login),
+  display_name = VALUES(display_name),
+  avatar_url = VALUES(avatar_url),
+  email = VALUES(email),
+  last_login_at = UTC_TIMESTAMP(6)
+`
+	createBrowserSessionQuery = `
+INSERT INTO user_sessions (user_id, session_token_hash, user_agent, ip_address, expires_at)
+VALUES (?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 30 DAY))
+`
+	browserSessionLookupQuery = `
+SELECT id, user_id, session_token_hash, user_agent, ip_address, expires_at, revoked_at
+FROM user_sessions
+WHERE session_token_hash = ? AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP(6)
+LIMIT 1
+`
+	revokeBrowserSessionQuery = `
+UPDATE user_sessions
+SET revoked_at = UTC_TIMESTAMP(6)
+WHERE session_token_hash = ? AND revoked_at IS NULL
+`
+)
+
 type MySQLStore struct {
 	db *sql.DB
 }
@@ -31,16 +59,7 @@ func OpenMySQL(dsn string) (*sql.DB, error) {
 }
 
 func (s *MySQLStore) UpsertGitHubUser(ctx context.Context, profile service.GitHubProfile) (uint64, error) {
-	if _, err := s.db.ExecContext(ctx, `
-INSERT INTO users (github_user_id, github_login, display_name, avatar_url, email, last_login_at)
-VALUES (?, ?, ?, ?, ?, NOW(6))
-ON DUPLICATE KEY UPDATE
-  github_login = VALUES(github_login),
-  display_name = VALUES(display_name),
-  avatar_url = VALUES(avatar_url),
-  email = VALUES(email),
-  last_login_at = NOW(6)
-`, profile.ID, profile.Login, profile.Name, nullableString(profile.AvatarURL), nullableString(profile.Email)); err != nil {
+	if _, err := s.db.ExecContext(ctx, upsertGitHubUserQuery, profile.ID, profile.Login, profile.Name, nullableString(profile.AvatarURL), nullableString(profile.Email)); err != nil {
 		return 0, fmt.Errorf("upsert github user: %w", err)
 	}
 
@@ -72,22 +91,14 @@ LIMIT 1
 }
 
 func (s *MySQLStore) CreateBrowserSession(ctx context.Context, userID uint64, tokenHash string, userAgent string, ip string) error {
-	if _, err := s.db.ExecContext(ctx, `
-INSERT INTO user_sessions (user_id, session_token_hash, user_agent, ip_address, expires_at)
-VALUES (?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 30 DAY))
-`, userID, tokenHash, nullableString(userAgent), nullableString(ip)); err != nil {
+	if _, err := s.db.ExecContext(ctx, createBrowserSessionQuery, userID, tokenHash, nullableString(userAgent), nullableString(ip)); err != nil {
 		return fmt.Errorf("create browser session: %w", err)
 	}
 	return nil
 }
 
 func (s *MySQLStore) GetBrowserSessionByTokenHash(ctx context.Context, tokenHash string) (domain.BrowserSession, error) {
-	row := s.db.QueryRowContext(ctx, `
-SELECT id, user_id, session_token_hash, user_agent, ip_address, expires_at, revoked_at
-FROM user_sessions
-WHERE session_token_hash = ? AND revoked_at IS NULL
-LIMIT 1
-`, tokenHash)
+	row := s.db.QueryRowContext(ctx, browserSessionLookupQuery, tokenHash)
 
 	var (
 		session   domain.BrowserSession
@@ -114,14 +125,14 @@ LIMIT 1
 }
 
 func (s *MySQLStore) RevokeBrowserSession(ctx context.Context, tokenHash string) error {
-	if _, err := s.db.ExecContext(ctx, `
-UPDATE user_sessions
-SET revoked_at = UTC_TIMESTAMP(6)
-WHERE session_token_hash = ? AND revoked_at IS NULL
-`, tokenHash); err != nil {
+	if _, err := s.db.ExecContext(ctx, revokeBrowserSessionQuery, tokenHash); err != nil {
 		return fmt.Errorf("revoke browser session: %w", err)
 	}
 	return nil
+}
+
+func BrowserSessionLookupQueryForTest() string {
+	return browserSessionLookupQuery
 }
 
 func scanCurrentUser(row *sql.Row) (domain.CurrentUser, error) {

@@ -3,10 +3,12 @@ package test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	httpx "gitgym/services/api/internal/http"
 	"gitgym/services/api/internal/service"
+	"gitgym/services/api/internal/store"
 )
 
 func TestGitHubLoginRouteIsMountedAsStub(t *testing.T) {
@@ -107,5 +109,16 @@ func TestNewSessionTokenReturnsHexAndStableHash(t *testing.T) {
 	}
 	if firstHash != secondHash {
 		t.Fatalf("expected deterministic hash, got %q and %q", firstHash, secondHash)
+	}
+}
+
+func TestBrowserSessionLookupQueryRequiresUnrevokedAndUnexpiredSession(t *testing.T) {
+	query := store.BrowserSessionLookupQueryForTest()
+
+	if !strings.Contains(query, "revoked_at IS NULL") {
+		t.Fatalf("expected revoked guard in query, got %q", query)
+	}
+	if !strings.Contains(query, "expires_at > UTC_TIMESTAMP(6)") {
+		t.Fatalf("expected expiry guard in query, got %q", query)
 	}
 }
