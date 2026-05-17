@@ -76,6 +76,29 @@ func TestTerminalManagerWritesInputToPTY(t *testing.T) {
 	}
 }
 
+func TestTerminalManagerKeepsShellAliveAfterAcquireContextCancellation(t *testing.T) {
+	workspace := createGitWorkspace(t)
+
+	acquireCtx, cancelAcquire := context.WithCancel(context.Background())
+	manager := engine.NewTerminalManager()
+	session, err := manager.Acquire(acquireCtx, workspace.Path, workspace.ID)
+	if err != nil {
+		t.Fatalf("acquire terminal session: %v", err)
+	}
+	t.Cleanup(func() {
+		releaseTerminalSession(t, manager, session, workspace.ID)
+	})
+
+	cancelAcquire()
+
+	marker := terminalMarker("context")
+	pattern := terminalLinePattern(marker, `__GITGYM_CONTEXT_ALIVE__`)
+	output := readTerminalUntilMatch(t, session, shellPrintLine(marker, "__GITGYM_CONTEXT_ALIVE__"), pattern)
+	if !pattern.MatchString(output) {
+		t.Fatalf("expected terminal output after acquire context cancellation, got %q", output)
+	}
+}
+
 func TestTerminalManagerResizesPTY(t *testing.T) {
 	workspace := createGitWorkspace(t)
 

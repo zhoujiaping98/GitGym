@@ -16,7 +16,7 @@ import (
 
 type TerminalManager struct {
 	mu       sync.Mutex
-	sessions map[string]*TerminalSession
+	sessions map[string]*terminalSessionSlot
 }
 
 type TerminalSession struct {
@@ -38,6 +38,21 @@ type TerminalSession struct {
 	doneOnce    sync.Once
 	backendOnce sync.Once
 	waitOnce    sync.Once
+}
+
+type terminalSessionSlotState int
+
+const (
+	slotStateStarting terminalSessionSlotState = iota
+	slotStateActive
+	slotStateReleasing
+)
+
+type terminalSessionSlot struct {
+	session  *TerminalSession
+	state    terminalSessionSlotState
+	ready    chan struct{}
+	released chan struct{}
 }
 
 type terminalBackend interface {
@@ -87,7 +102,7 @@ func (b *windowsTerminalBackend) Resize(cols uint16, rows uint16) error {
 
 func NewTerminalManager() *TerminalManager {
 	return &TerminalManager{
-		sessions: make(map[string]*TerminalSession),
+		sessions: make(map[string]*terminalSessionSlot),
 	}
 }
 
@@ -96,52 +111,118 @@ func (m *TerminalManager) Acquire(ctx context.Context, workspacePath string, wor
 		return nil, err
 	}
 
-	m.mu.Lock()
-	if m.sessions == nil {
-		m.sessions = make(map[string]*TerminalSession)
-	}
-	if session, ok := m.sessions[workspaceID]; ok {
-		if session.isClosed() {
-			delete(m.sessions, workspaceID)
-		} else {
-			m.mu.Unlock()
-			return session, nil
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-	}
-	m.mu.Unlock()
 
-	session, err := startTerminalSession(ctx, workspacePath, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if existing, ok := m.sessions[workspaceID]; ok {
-		if existing.isClosed() {
-			delete(m.sessions, workspaceID)
-		} else {
-			_ = session.close()
-			return existing, nil
+		m.mu.Lock()
+		if m.sessions == nil {
+			m.sessions = make(map[string]*terminalSessionSlot)
 		}
-	}
+		if slot, ok := m.sessions[workspaceID]; ok {
+			switch slot.state {
+			case slotStateActive:
+				session := slot.session
+				if session != nil && !session.isClosed() {
+					m.mu.Unlock()
+					return session, nil
+				}
+				delete(m.sessions, workspaceID)
+			case slotStateStarting:
+				ready := slot.ready
+				m.mu.Unlock()
+				if err := waitForSlot(ctx, ready); err != nil {
+					return nil, err
+				}
+				continue
+			case slotStateReleasing:
+				released := slot.released
+				m.mu.Unlock()
+				if err := waitForSlot(ctx, released); err != nil {
+					return nil, err
+				}
+				continue
+			default:
+				delete(m.sessions, workspaceID)
+			}
+		}
 
-	m.sessions[workspaceID] = session
-	return session, nil
+		slot := &terminalSessionSlot{
+			state: slotStateStarting,
+			ready: make(chan struct{}),
+		}
+		m.sessions[workspaceID] = slot
+		m.mu.Unlock()
+
+		session, err := startTerminalSession(ctx, workspacePath, workspaceID)
+
+		m.mu.Lock()
+		current := m.sessions[workspaceID]
+		if current == slot {
+			if err != nil {
+				delete(m.sessions, workspaceID)
+			} else {
+				slot.session = session
+				slot.state = slotStateActive
+			}
+			close(slot.ready)
+		}
+		m.mu.Unlock()
+
+		if err != nil {
+			return nil, err
+		}
+
+		return session, nil
+	}
 }
 
 func (m *TerminalManager) Release(workspaceID string) error {
-	m.mu.Lock()
-	session := m.sessions[workspaceID]
-	delete(m.sessions, workspaceID)
-	m.mu.Unlock()
+	for {
+		m.mu.Lock()
+		slot := m.sessions[workspaceID]
+		if slot == nil {
+			m.mu.Unlock()
+			return nil
+		}
 
-	if session == nil {
-		return nil
+		switch slot.state {
+		case slotStateStarting:
+			ready := slot.ready
+			m.mu.Unlock()
+			<-ready
+			continue
+		case slotStateReleasing:
+			released := slot.released
+			m.mu.Unlock()
+			<-released
+			return nil
+		case slotStateActive:
+			session := slot.session
+			slot.state = slotStateReleasing
+			slot.released = make(chan struct{})
+			released := slot.released
+			m.mu.Unlock()
+
+			var err error
+			if session != nil {
+				err = session.close()
+			}
+
+			m.mu.Lock()
+			if m.sessions[workspaceID] == slot {
+				delete(m.sessions, workspaceID)
+			}
+			close(released)
+			m.mu.Unlock()
+			return err
+		default:
+			delete(m.sessions, workspaceID)
+			m.mu.Unlock()
+			return nil
+		}
 	}
-
-	return session.close()
 }
 
 func (s *TerminalSession) WriteInput(data string) error {
@@ -243,6 +324,10 @@ func ensureWorkspacePath(workspacePath string) error {
 }
 
 func startTerminalSession(ctx context.Context, workspacePath string, workspaceID string) (*TerminalSession, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	session := &TerminalSession{
 		WorkspaceID:   workspaceID,
 		WorkspacePath: workspacePath,
@@ -265,12 +350,16 @@ func startTerminalSession(ctx context.Context, workspacePath string, workspaceID
 }
 
 func startUnixShell(ctx context.Context, session *TerminalSession) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	command, args, err := shellCommand()
 	if err != nil {
 		return err
 	}
 
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.Command(command, args...)
 	cmd.Dir = session.WorkspacePath
 	configureTerminalCommand(cmd)
 
@@ -294,6 +383,10 @@ func startUnixShell(ctx context.Context, session *TerminalSession) error {
 }
 
 func startWindowsShell(ctx context.Context, session *TerminalSession) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	pty, err := winpty.New()
 	if err != nil {
 		return err
@@ -304,7 +397,12 @@ func startWindowsShell(ctx context.Context, session *TerminalSession) error {
 		_ = pty.Close()
 		return err
 	}
-	cmd := pty.CommandContext(ctx, command, args...)
+	if err := ctx.Err(); err != nil {
+		_ = pty.Close()
+		return err
+	}
+
+	cmd := pty.Command(command, args...)
 	cmd.Dir = session.WorkspacePath
 
 	if err := cmd.Start(); err != nil {
@@ -494,5 +592,14 @@ func normalizeWaitCloseErr(err error) error {
 		return io.EOF
 	default:
 		return err
+	}
+}
+
+func waitForSlot(ctx context.Context, ch <-chan struct{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ch:
+		return nil
 	}
 }
