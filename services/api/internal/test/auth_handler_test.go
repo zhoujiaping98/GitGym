@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,13 @@ import (
 	"gitgym/services/api/internal/store"
 	mysql "github.com/go-sql-driver/mysql"
 )
+
+func TestMain(m *testing.M) {
+	restore := httpx.SetDefaultAuthStoreFactoryForTests(newDefaultTestAuthStore)
+	code := m.Run()
+	restore()
+	os.Exit(code)
+}
 
 func TestGitHubLoginRedirectsToGitHub(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/github/login", nil)
@@ -214,6 +222,21 @@ func TestAuthMeReturnsUnauthorizedWithoutPersistedSession(t *testing.T) {
 	httpx.NewRouter(httpx.Dependencies{
 		AuthStore: &stubUserStore{},
 	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestAuthMeDefaultRouterRejectsCannedSessionCookie(t *testing.T) {
+	restore := httpx.SetDefaultAuthStoreFactoryForTests(nil)
+	t.Cleanup(restore)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rec.Code)
@@ -437,4 +460,37 @@ func (s *stubGitHubOAuthClient) FetchProfile(_ context.Context, accessToken stri
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func newDefaultTestAuthStore() service.UserStore {
+	return &stubUserStore{
+		userByID: map[uint64]domain.CurrentUser{
+			1: {
+				ID:          1,
+				GitHubID:    1,
+				GitHubLogin: "dev-user",
+				DisplayName: "Dev User",
+			},
+		},
+		sessionByTokenHash: map[string]domain.BrowserSession{
+			service.HashSessionToken("session-token"): {
+				ID:               1,
+				UserID:           1,
+				SessionTokenHash: service.HashSessionToken("session-token"),
+				ExpiresAt:        time.Now().Add(24 * time.Hour).UTC(),
+			},
+			service.HashSessionToken("uid:42:session-token"): {
+				ID:               2,
+				UserID:           1,
+				SessionTokenHash: service.HashSessionToken("uid:42:session-token"),
+				ExpiresAt:        time.Now().Add(24 * time.Hour).UTC(),
+			},
+			service.HashSessionToken("123"): {
+				ID:               3,
+				UserID:           1,
+				SessionTokenHash: service.HashSessionToken("123"),
+				ExpiresAt:        time.Now().Add(24 * time.Hour).UTC(),
+			},
+		},
+	}
 }

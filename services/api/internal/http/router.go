@@ -1,14 +1,13 @@
 package httpx
 
 import (
-	"context"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"gitgym/services/api/internal/config"
-	"gitgym/services/api/internal/domain"
 	"gitgym/services/api/internal/http/handlers"
 	"gitgym/services/api/internal/http/middleware"
 	"gitgym/services/api/internal/oauth"
@@ -24,6 +23,11 @@ type Dependencies struct {
 	AuthConfig        config.Config
 	GitHubOAuthClient oauth.GitHubOAuthClient
 }
+
+var (
+	defaultAuthStoreFactoryForTestsMu sync.RWMutex
+	defaultAuthStoreFactoryForTests   func() service.UserStore
+)
 
 func NewRouter(deps ...Dependencies) http.Handler {
 	dependencies := mergeDependencies(defaultDependencies(), deps...)
@@ -124,128 +128,24 @@ func defaultAuthStore(mysqlDSN string) service.UserStore {
 			return store.NewMySQLStore(db)
 		}
 	}
-
-	return &seededAuthStore{
-		userByGitHubID: map[uint64]domain.CurrentUser{
-			1: {
-				ID:          1,
-				GitHubID:    1,
-				GitHubLogin: "dev-user",
-				DisplayName: "Dev User",
-			},
-		},
-		userByID: map[uint64]domain.CurrentUser{
-			1: {
-				ID:          1,
-				GitHubID:    1,
-				GitHubLogin: "dev-user",
-				DisplayName: "Dev User",
-			},
-		},
-		sessionByTokenHash: map[string]domain.BrowserSession{
-			service.HashSessionToken("session-token"): {
-				ID:               1,
-				UserID:           1,
-				SessionTokenHash: service.HashSessionToken("session-token"),
-				ExpiresAt:        time.Now().Add(24 * time.Hour).UTC(),
-			},
-			service.HashSessionToken("uid:42:session-token"): {
-				ID:               2,
-				UserID:           1,
-				SessionTokenHash: service.HashSessionToken("uid:42:session-token"),
-				ExpiresAt:        time.Now().Add(24 * time.Hour).UTC(),
-			},
-			service.HashSessionToken("123"): {
-				ID:               3,
-				UserID:           1,
-				SessionTokenHash: service.HashSessionToken("123"),
-				ExpiresAt:        time.Now().Add(24 * time.Hour).UTC(),
-			},
-		},
-		nextUserID:    2,
-		nextSessionID: 4,
+	defaultAuthStoreFactoryForTestsMu.RLock()
+	factory := defaultAuthStoreFactoryForTests
+	defaultAuthStoreFactoryForTestsMu.RUnlock()
+	if factory != nil {
+		return factory()
 	}
-}
-
-type seededAuthStore struct {
-	userByGitHubID     map[uint64]domain.CurrentUser
-	userByID           map[uint64]domain.CurrentUser
-	sessionByTokenHash map[string]domain.BrowserSession
-	nextUserID         uint64
-	nextSessionID      uint64
-}
-
-func (s *seededAuthStore) UpsertGitHubUser(_ context.Context, profile service.GitHubProfile) (uint64, error) {
-	if existing, ok := s.userByGitHubID[profile.ID]; ok {
-		updated := existing
-		updated.GitHubLogin = profile.Login
-		updated.DisplayName = profile.Name
-		updated.AvatarURL = stringPointer(profile.AvatarURL)
-		updated.Email = stringPointer(profile.Email)
-		s.userByGitHubID[profile.ID] = updated
-		s.userByID[updated.ID] = updated
-		return updated.ID, nil
-	}
-
-	user := domain.CurrentUser{
-		ID:          s.nextUserID,
-		GitHubID:    profile.ID,
-		GitHubLogin: profile.Login,
-		DisplayName: profile.Name,
-		AvatarURL:   stringPointer(profile.AvatarURL),
-		Email:       stringPointer(profile.Email),
-	}
-	s.userByGitHubID[profile.ID] = user
-	s.userByID[user.ID] = user
-	s.nextUserID++
-	return user.ID, nil
-}
-
-func (s *seededAuthStore) GetUserByGitHubID(_ context.Context, githubUserID uint64) (domain.CurrentUser, error) {
-	user, ok := s.userByGitHubID[githubUserID]
-	if !ok {
-		return domain.CurrentUser{}, service.ErrBrowserSessionNotFound
-	}
-	return user, nil
-}
-
-func (s *seededAuthStore) GetUserByID(_ context.Context, userID uint64) (domain.CurrentUser, error) {
-	user, ok := s.userByID[userID]
-	if !ok {
-		return domain.CurrentUser{}, service.ErrBrowserSessionNotFound
-	}
-	return user, nil
-}
-
-func (s *seededAuthStore) CreateBrowserSession(_ context.Context, userID uint64, tokenHash string, userAgent string, ip string) error {
-	s.sessionByTokenHash[tokenHash] = domain.BrowserSession{
-		ID:               s.nextSessionID,
-		UserID:           userID,
-		SessionTokenHash: tokenHash,
-		UserAgent:        stringPointer(userAgent),
-		IPAddress:        stringPointer(ip),
-		ExpiresAt:        time.Now().Add(30 * 24 * time.Hour).UTC(),
-	}
-	s.nextSessionID++
 	return nil
 }
 
-func (s *seededAuthStore) GetBrowserSessionByTokenHash(_ context.Context, tokenHash string) (domain.BrowserSession, error) {
-	session, ok := s.sessionByTokenHash[tokenHash]
-	if !ok {
-		return domain.BrowserSession{}, service.ErrBrowserSessionNotFound
-	}
-	return session, nil
-}
+func SetDefaultAuthStoreFactoryForTests(factory func() service.UserStore) func() {
+	defaultAuthStoreFactoryForTestsMu.Lock()
+	previous := defaultAuthStoreFactoryForTests
+	defaultAuthStoreFactoryForTests = factory
+	defaultAuthStoreFactoryForTestsMu.Unlock()
 
-func (s *seededAuthStore) RevokeBrowserSession(_ context.Context, tokenHash string) error {
-	delete(s.sessionByTokenHash, tokenHash)
-	return nil
-}
-
-func stringPointer(value string) *string {
-	if value == "" {
-		return nil
+	return func() {
+		defaultAuthStoreFactoryForTestsMu.Lock()
+		defaultAuthStoreFactoryForTests = previous
+		defaultAuthStoreFactoryForTestsMu.Unlock()
 	}
-	return &value
 }
