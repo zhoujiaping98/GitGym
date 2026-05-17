@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
+
+	"gitgym/services/api/internal/service"
 )
 
 type authenticatedSessionKey struct{}
@@ -17,31 +20,43 @@ type AuthenticatedSession struct {
 	SessionToken string
 }
 
-func RequireSessionCookie(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("gitgym_session")
-		if err != nil || cookie.Value == "" {
-			if devAuthBypassEnabled() && requestFromLoopback(r) {
-				session := AuthenticatedSession{
-					UserID:       defaultAuthenticatedUserID,
-					SessionToken: "dev-auth-bypass",
+func RequireSessionCookie(authStore service.UserStore) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cookie, err := r.Cookie("gitgym_session")
+			if err != nil || cookie.Value == "" {
+				if devAuthBypassEnabled() && requestFromLoopback(r) {
+					session := AuthenticatedSession{
+						UserID:       defaultAuthenticatedUserID,
+						SessionToken: "dev-auth-bypass",
+					}
+					ctx := context.WithValue(r.Context(), authenticatedSessionKey{}, session)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
 				}
-				ctx := context.WithValue(r.Context(), authenticatedSessionKey{}, session)
-				next.ServeHTTP(w, r.WithContext(ctx))
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+			if authStore == nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 
-		session := AuthenticatedSession{
-			UserID:       defaultAuthenticatedUserID,
-			SessionToken: cookie.Value,
-		}
+			browserSession, err := authStore.GetBrowserSessionByTokenHash(r.Context(), service.HashSessionToken(cookie.Value))
+			if err != nil || browserSession.UserID == 0 || browserSession.ExpiresAt.Before(time.Now().UTC()) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 
-		ctx := context.WithValue(r.Context(), authenticatedSessionKey{}, session)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+			session := AuthenticatedSession{
+				UserID:       browserSession.UserID,
+				SessionToken: cookie.Value,
+			}
+
+			ctx := context.WithValue(r.Context(), authenticatedSessionKey{}, session)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
 }
 
 func AuthenticatedSessionFromContext(ctx context.Context) (AuthenticatedSession, bool) {
