@@ -9,6 +9,7 @@ import (
 	"gitgym/services/api/internal/domain"
 	"gitgym/services/api/internal/runner"
 	"gitgym/services/api/internal/service"
+	"github.com/coder/websocket"
 )
 
 func TestPracticeServiceCreatesSessionFromRunnerWorkspace(t *testing.T) {
@@ -324,8 +325,10 @@ type stubRunnerClient struct {
 	resetWorkspaceCalls  int
 	lastResetWorkspaceID string
 	workspace            runner.Workspace
+	connectTerminalFunc  func(context.Context, string) (runner.TerminalConnection, error)
 	err                  error
 	resetErr             error
+	connectErr           error
 }
 
 func (s *stubRunnerClient) CreateWorkspace(_ context.Context, template string) (runner.Workspace, error) {
@@ -343,5 +346,29 @@ func (s *stubRunnerClient) ResetWorkspace(_ context.Context, workspaceID string)
 	if s.resetErr != nil {
 		return s.resetErr
 	}
+	return nil
+}
+
+func (s *stubRunnerClient) ConnectTerminal(ctx context.Context, workspaceID string) (runner.TerminalConnection, error) {
+	if s.connectTerminalFunc != nil {
+		return s.connectTerminalFunc(ctx, workspaceID)
+	}
+	if s.connectErr != nil {
+		return nil, s.connectErr
+	}
+	return &stubTerminalConnection{}, nil
+}
+
+type stubTerminalConnection struct{}
+
+func (s *stubTerminalConnection) Read(context.Context) (int, []byte, error) {
+	return 0, nil, context.Canceled
+}
+
+func (s *stubTerminalConnection) Write(context.Context, int, []byte) error {
+	return nil
+}
+
+func (s *stubTerminalConnection) Close(websocket.StatusCode, string) error {
 	return nil
 }

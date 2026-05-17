@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/coder/websocket"
 )
 
 var ErrClientNotConfigured = errors.New("runner client is not configured")
@@ -19,9 +21,16 @@ type Workspace struct {
 	Template string `json:"template"`
 }
 
+type TerminalConnection interface {
+	Read(ctx context.Context) (int, []byte, error)
+	Write(ctx context.Context, messageType int, payload []byte) error
+	Close(status websocket.StatusCode, reason string) error
+}
+
 type Client interface {
 	CreateWorkspace(ctx context.Context, template string) (Workspace, error)
 	ResetWorkspace(ctx context.Context, workspaceID string) error
+	ConnectTerminal(ctx context.Context, workspaceID string) (TerminalConnection, error)
 }
 
 type HTTPClient struct {
@@ -109,4 +118,65 @@ func (c *HTTPClient) ResetWorkspace(ctx context.Context, workspaceID string) err
 	}
 
 	return nil
+}
+
+func (c *HTTPClient) ConnectTerminal(ctx context.Context, workspaceID string) (TerminalConnection, error) {
+	terminalURL, err := c.terminalURL(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, _, err := websocket.Dial(ctx, terminalURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("connect runner terminal: %w", err)
+	}
+
+	return websocketTerminalConnection{conn: conn}, nil
+}
+
+func (c *HTTPClient) terminalURL(workspaceID string) (string, error) {
+	if c.baseURL == "" {
+		return "", ErrClientNotConfigured
+	}
+	if strings.TrimSpace(workspaceID) == "" {
+		return "", fmt.Errorf("workspace ID is required")
+	}
+
+	baseURL, err := url.Parse(c.baseURL)
+	if err != nil {
+		return "", fmt.Errorf("parse runner base URL: %w", err)
+	}
+
+	switch baseURL.Scheme {
+	case "http":
+		baseURL.Scheme = "ws"
+	case "https":
+		baseURL.Scheme = "wss"
+	case "ws", "wss":
+	default:
+		return "", fmt.Errorf("unsupported runner base URL scheme %q", baseURL.Scheme)
+	}
+
+	baseURL.Path = strings.TrimRight(baseURL.Path, "/") + "/internal/workspaces/" + url.PathEscape(workspaceID) + "/terminal"
+	baseURL.RawQuery = ""
+	baseURL.Fragment = ""
+
+	return baseURL.String(), nil
+}
+
+type websocketTerminalConnection struct {
+	conn *websocket.Conn
+}
+
+func (c websocketTerminalConnection) Read(ctx context.Context) (int, []byte, error) {
+	messageType, payload, err := c.conn.Read(ctx)
+	return int(messageType), payload, err
+}
+
+func (c websocketTerminalConnection) Write(ctx context.Context, messageType int, payload []byte) error {
+	return c.conn.Write(ctx, websocket.MessageType(messageType), payload)
+}
+
+func (c websocketTerminalConnection) Close(status websocket.StatusCode, reason string) error {
+	return c.conn.Close(status, reason)
 }

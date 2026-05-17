@@ -3,17 +3,17 @@ package handlers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 
 	"gitgym/services/api/internal/http/middleware"
+	"gitgym/services/api/internal/runner"
 	"gitgym/services/api/internal/service"
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 )
 
-func PracticeTerminalWebsocket(practiceService service.PracticeService) http.HandlerFunc {
+func PracticeTerminalWebsocket(practiceService service.PracticeService, runnerClient runner.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authenticatedSession, ok := middleware.AuthenticatedSessionFromContext(r.Context())
 		if !ok || authenticatedSession.UserID == 0 {
@@ -38,36 +38,95 @@ func PracticeTerminalWebsocket(practiceService service.PracticeService) http.Han
 			})
 			return
 		}
+		if runnerClient == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": "runner client is not configured",
+			})
+			return
+		}
 
-		conn, err := websocket.Accept(w, r, nil)
+		browserSocket, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
 		}
-		defer conn.Close(websocket.StatusNormalClosure, "")
+		browserConn := websocketTerminalConnection{conn: browserSocket}
+		defer browserConn.Close(websocket.StatusNormalClosure, "")
 
-		if err := writeTerminalLine(r.Context(), conn, fmt.Sprintf("Connected to %s at %s", session.RunnerRef, session.WorkspacePathRef)); err != nil {
+		runnerConn, err := runnerClient.ConnectTerminal(r.Context(), session.RunnerRef)
+		if err != nil {
+			_ = browserConn.Close(websocket.StatusInternalError, "runner terminal unavailable")
 			return
 		}
+		defer runnerConn.Close(websocket.StatusNormalClosure, "")
 
-		for {
-			messageType, payload, err := conn.Read(r.Context())
-			if err != nil {
-				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
-					return
-				}
-				_ = conn.Close(websocket.StatusInternalError, "read error")
-				return
-			}
-			if messageType != websocket.MessageText && messageType != websocket.MessageBinary {
-				continue
-			}
-			if err := conn.Write(r.Context(), messageType, payload); err != nil {
-				return
-			}
+		bridgeCtx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+
+		bridgeErr := make(chan error, 2)
+
+		go func() {
+			bridgeErr <- proxyTerminalFrames(bridgeCtx, browserConn, runnerConn)
+		}()
+		go func() {
+			bridgeErr <- proxyTerminalFrames(bridgeCtx, runnerConn, browserConn)
+		}()
+
+		err = <-bridgeErr
+		cancel()
+
+		closeStatus := websocket.StatusNormalClosure
+		closeReason := ""
+		if !isTerminalBridgeShutdown(err) {
+			closeStatus = websocket.StatusInternalError
+			closeReason = "terminal bridge error"
+		}
+
+		_ = runnerConn.Close(closeStatus, closeReason)
+		_ = browserConn.Close(closeStatus, closeReason)
+	}
+}
+
+func proxyTerminalFrames(ctx context.Context, src runner.TerminalConnection, dst runner.TerminalConnection) error {
+	for {
+		messageType, payload, err := src.Read(ctx)
+		if err != nil {
+			return err
+		}
+		if messageType != int(websocket.MessageText) && messageType != int(websocket.MessageBinary) {
+			continue
+		}
+		if err := dst.Write(ctx, messageType, payload); err != nil {
+			return err
 		}
 	}
 }
 
-func writeTerminalLine(ctx context.Context, conn *websocket.Conn, line string) error {
-	return conn.Write(ctx, websocket.MessageText, []byte(line))
+func isTerminalBridgeShutdown(err error) bool {
+	if err == nil {
+		return true
+	}
+
+	status := websocket.CloseStatus(err)
+	if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
+		return true
+	}
+
+	return errors.Is(err, context.Canceled)
+}
+
+type websocketTerminalConnection struct {
+	conn *websocket.Conn
+}
+
+func (c websocketTerminalConnection) Read(ctx context.Context) (int, []byte, error) {
+	messageType, payload, err := c.conn.Read(ctx)
+	return int(messageType), payload, err
+}
+
+func (c websocketTerminalConnection) Write(ctx context.Context, messageType int, payload []byte) error {
+	return c.conn.Write(ctx, websocket.MessageType(messageType), payload)
+}
+
+func (c websocketTerminalConnection) Close(status websocket.StatusCode, reason string) error {
+	return c.conn.Close(status, reason)
 }

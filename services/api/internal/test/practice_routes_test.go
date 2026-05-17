@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,7 +15,6 @@ import (
 	httpx "gitgym/services/api/internal/http"
 	"gitgym/services/api/internal/runner"
 	"gitgym/services/api/internal/service"
-	"github.com/coder/websocket"
 )
 
 func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
@@ -288,75 +286,6 @@ func TestCurrentPracticeSessionReturnsStoredSession(t *testing.T) {
 	}
 	if payload.Session.Status != "active" {
 		t.Fatalf("expected active status, got %q", payload.Session.Status)
-	}
-}
-
-func TestPracticeTerminalWebsocketSeedsAndEchoesSession(t *testing.T) {
-	t.Parallel()
-
-	practiceService := service.NewPracticeService(
-		service.NewInMemoryPracticeSessionStore(),
-		&stubRunnerClient{
-			workspace: runner.Workspace{
-				ID:       "ws-terminal",
-				Path:     "/tmp/ws-terminal",
-				Template: "standard",
-			},
-		},
-		func() time.Time {
-			return time.Date(2026, 5, 16, 13, 0, 0, 0, time.UTC)
-		},
-	)
-
-	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
-		UserID:     42,
-		ScenarioID: 11,
-		TemplateID: 1,
-	})
-	if err != nil {
-		t.Fatalf("create practice session: %v", err)
-	}
-
-	server := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
-		PracticeService: practiceService,
-		AuthStore:       authStoreWithSession("terminal-session-token", 42),
-	}))
-	defer server.Close()
-
-	wsURL := fmt.Sprintf(
-		"ws%s/api/v1/practice-sessions/%d/terminal",
-		strings.TrimPrefix(server.URL, "http"),
-		session.ID,
-	)
-	header := http.Header{}
-	header.Add("Cookie", "gitgym_session=terminal-session-token")
-
-	conn, _, err := websocket.Dial(context.Background(), wsURL, &websocket.DialOptions{
-		HTTPHeader: header,
-	})
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	_, seedLine, err := conn.Read(context.Background())
-	if err != nil {
-		t.Fatalf("read seed line: %v", err)
-	}
-	if !strings.Contains(string(seedLine), session.RunnerRef) {
-		t.Fatalf("expected seed line to mention runner ref %q, got %q", session.RunnerRef, string(seedLine))
-	}
-
-	if err := conn.Write(context.Background(), websocket.MessageText, []byte("git status --short")); err != nil {
-		t.Fatalf("write websocket payload: %v", err)
-	}
-
-	_, echoedLine, err := conn.Read(context.Background())
-	if err != nil {
-		t.Fatalf("read echoed line: %v", err)
-	}
-	if string(echoedLine) != "git status --short" {
-		t.Fatalf("expected echoed line %q, got %q", "git status --short", string(echoedLine))
 	}
 }
 
