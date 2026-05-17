@@ -3,7 +3,6 @@ package httpx
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +19,7 @@ import (
 
 type Dependencies struct {
 	PracticeService     service.PracticeService
+	RunnerClient        runner.Client
 	AuthStore           service.UserStore
 	AuthConfig          config.Config
 	GitHubOAuthClient   oauth.GitHubOAuthClient
@@ -37,6 +37,16 @@ func NewRouter(deps ...Dependencies) http.Handler {
 	dependencies := mergeDependencies(defaultDependencies(), deps...)
 	if dependencies.InitializationError != nil {
 		return newInitializationErrorRouter(dependencies.InitializationError)
+	}
+	if dependencies.RunnerClient == nil {
+		dependencies.RunnerClient = runner.NewClient(dependencies.AuthConfig.RunnerBaseURL, http.DefaultClient)
+	}
+	if dependencies.PracticeService == nil {
+		dependencies.PracticeService = service.NewPracticeService(
+			service.NewInMemoryPracticeSessionStore(),
+			dependencies.RunnerClient,
+			time.Now,
+		)
 	}
 	if dependencies.GitHubOAuthClient == nil {
 		dependencies.GitHubOAuthClient = oauth.NewGitHubOAuthClient(
@@ -61,10 +71,7 @@ func NewRouter(deps ...Dependencies) http.Handler {
 			r.Get("/practice-sessions/current", handlers.GetCurrentPracticeSession(dependencies.PracticeService))
 			r.Post("/practice-sessions", handlers.CreatePracticeSession(dependencies.PracticeService))
 			r.Post("/practice-sessions/{sessionId}/reset", handlers.ResetPracticeSession(dependencies.PracticeService))
-			r.Get("/practice-sessions/{sessionId}/terminal", handlers.PracticeTerminalWebsocket(
-				dependencies.PracticeService,
-				runner.NewClient(dependencies.AuthConfig.RunnerBaseURL, http.DefaultClient),
-			))
+			r.Get("/practice-sessions/{sessionId}/terminal", handlers.PracticeTerminalWebsocket(dependencies.PracticeService, dependencies.RunnerClient))
 		})
 	})
 	return r
@@ -75,11 +82,6 @@ func defaultDependencies() Dependencies {
 	authStore, initErr := defaultAuthStore(authConfig.MySQLDSN)
 
 	return Dependencies{
-		PracticeService: service.NewPracticeService(
-			service.NewInMemoryPracticeSessionStore(),
-			runner.NewClient(os.Getenv("RUNNER_BASE_URL"), http.DefaultClient),
-			time.Now,
-		),
 		AuthStore:           authStore,
 		AuthConfig:          authConfig,
 		InitializationError: initErr,
@@ -94,6 +96,9 @@ func mergeDependencies(base Dependencies, overrides ...Dependencies) Dependencie
 	override := overrides[0]
 	if override.PracticeService != nil {
 		base.PracticeService = override.PracticeService
+	}
+	if override.RunnerClient != nil {
+		base.RunnerClient = override.RunnerClient
 	}
 	if override.AuthStore != nil {
 		base.AuthStore = override.AuthStore

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"gitgym/services/api/internal/config"
 	httpx "gitgym/services/api/internal/http"
 	"gitgym/services/api/internal/runner"
 	"gitgym/services/api/internal/service"
@@ -48,7 +47,10 @@ func TestPracticeTerminalWebSocketRejectsForeignSession(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	_, resp, err := websocket.Dial(context.Background(), practiceTerminalURL(apiServer.URL, session.ID), &websocket.DialOptions{
+	ctx, cancel := testTimeoutContext(t)
+	defer cancel()
+
+	_, resp, err := websocket.Dial(ctx, practiceTerminalURL(apiServer.URL, session.ID), &websocket.DialOptions{
 		HTTPHeader: practiceTerminalHeaders("foreign-session-token"),
 	})
 	if err == nil {
@@ -109,21 +111,17 @@ func TestPracticeTerminalWebSocketBridgesRunnerOutput(t *testing.T) {
 	apiServer := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
 		PracticeService: practiceService,
 		AuthStore:       authStoreWithSession("runner-output-token", 42),
-		AuthConfig: config.Config{
-			RunnerBaseURL: runnerServer.URL,
-		},
+		RunnerClient:    runner.NewClient(runnerServer.URL, http.DefaultClient),
 	}))
 	defer apiServer.Close()
 
-	conn, _, err := websocket.Dial(context.Background(), practiceTerminalURL(apiServer.URL, session.ID), &websocket.DialOptions{
-		HTTPHeader: practiceTerminalHeaders("runner-output-token"),
-	})
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
+	conn := dialPracticeTerminal(t, apiServer.URL, session.ID, "runner-output-token")
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	_, payload, err := conn.Read(context.Background())
+	ctx, cancel := testTimeoutContext(t)
+	defer cancel()
+
+	_, payload, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatalf("read bridged runner output: %v", err)
 	}
@@ -187,21 +185,17 @@ func TestPracticeTerminalWebSocketForwardsBrowserInput(t *testing.T) {
 	apiServer := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
 		PracticeService: practiceService,
 		AuthStore:       authStoreWithSession("browser-input-token", 42),
-		AuthConfig: config.Config{
-			RunnerBaseURL: runnerServer.URL,
-		},
+		RunnerClient:    runner.NewClient(runnerServer.URL, http.DefaultClient),
 	}))
 	defer apiServer.Close()
 
-	conn, _, err := websocket.Dial(context.Background(), practiceTerminalURL(apiServer.URL, session.ID), &websocket.DialOptions{
-		HTTPHeader: practiceTerminalHeaders("browser-input-token"),
-	})
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
+	conn := dialPracticeTerminal(t, apiServer.URL, session.ID, "browser-input-token")
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	if err := conn.Write(context.Background(), websocket.MessageText, []byte("git status --short")); err != nil {
+	ctx, cancel := testTimeoutContext(t)
+	defer cancel()
+
+	if err := conn.Write(ctx, websocket.MessageText, []byte("git status --short")); err != nil {
 		t.Fatalf("write browser input: %v", err)
 	}
 
@@ -215,6 +209,60 @@ func TestPracticeTerminalWebSocketForwardsBrowserInput(t *testing.T) {
 	}
 }
 
+func TestPracticeTerminalWebSocketPreservesRunnerCloseStatus(t *testing.T) {
+	t.Parallel()
+
+	practiceService := service.NewPracticeService(
+		service.NewInMemoryPracticeSessionStore(),
+		&stubRunnerClient{
+			workspace: runner.Workspace{
+				ID:       "ws-close",
+				Path:     "/tmp/ws-close",
+				Template: "standard",
+			},
+		},
+		func() time.Time {
+			return time.Date(2026, 5, 17, 8, 15, 0, 0, time.UTC)
+		},
+	)
+
+	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 7,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	apiServer := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
+		PracticeService: practiceService,
+		AuthStore:       authStoreWithSession("runner-close-token", 42),
+		RunnerClient: &stubRunnerClient{
+			connectTerminalFunc: func(context.Context, string) (runner.TerminalConnection, error) {
+				return terminalConnectionStub{
+					readErr: websocket.CloseError{
+						Code:   websocket.StatusPolicyViolation,
+						Reason: "runner refused",
+					},
+				}, nil
+			},
+		},
+	}))
+	defer apiServer.Close()
+
+	conn := dialPracticeTerminal(t, apiServer.URL, session.ID, "runner-close-token")
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	ctx, cancel := testTimeoutContext(t)
+	defer cancel()
+
+	_, _, err = conn.Read(ctx)
+	if websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+		t.Fatalf("expected browser close status %d, got err %v with status %d", websocket.StatusPolicyViolation, err, websocket.CloseStatus(err))
+	}
+}
+
 func practiceTerminalURL(serverURL string, sessionID uint64) string {
 	return fmt.Sprintf("ws%s/api/v1/practice-sessions/%d/terminal", strings.TrimPrefix(serverURL, "http"), sessionID)
 }
@@ -223,4 +271,45 @@ func practiceTerminalHeaders(token string) http.Header {
 	header := http.Header{}
 	header.Add("Cookie", "gitgym_session="+token)
 	return header
+}
+
+func dialPracticeTerminal(t *testing.T, serverURL string, sessionID uint64, token string) *websocket.Conn {
+	t.Helper()
+
+	ctx, cancel := testTimeoutContext(t)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, practiceTerminalURL(serverURL, sessionID), &websocket.DialOptions{
+		HTTPHeader: practiceTerminalHeaders(token),
+	})
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+
+	return conn
+}
+
+func testTimeoutContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	return context.WithTimeout(context.Background(), 2*time.Second)
+}
+
+type terminalConnectionStub struct {
+	readType int
+	readData []byte
+	readErr  error
+	writeErr error
+	closeErr error
+}
+
+func (s terminalConnectionStub) Read(context.Context) (int, []byte, error) {
+	return s.readType, s.readData, s.readErr
+}
+
+func (s terminalConnectionStub) Write(context.Context, int, []byte) error {
+	return s.writeErr
+}
+
+func (s terminalConnectionStub) Close(websocket.StatusCode, string) error {
+	return s.closeErr
 }

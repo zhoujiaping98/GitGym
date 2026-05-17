@@ -72,17 +72,12 @@ func PracticeTerminalWebsocket(practiceService service.PracticeService, runnerCl
 		}()
 
 		err = <-bridgeErr
-		cancel()
 
-		closeStatus := websocket.StatusNormalClosure
-		closeReason := ""
-		if !isTerminalBridgeShutdown(err) {
-			closeStatus = websocket.StatusInternalError
-			closeReason = "terminal bridge error"
-		}
+		closeStatus, closeReason := terminalCloseFromError(err)
 
 		_ = runnerConn.Close(closeStatus, closeReason)
 		_ = browserConn.Close(closeStatus, closeReason)
+		cancel()
 	}
 }
 
@@ -101,17 +96,17 @@ func proxyTerminalFrames(ctx context.Context, src runner.TerminalConnection, dst
 	}
 }
 
-func isTerminalBridgeShutdown(err error) bool {
-	if err == nil {
-		return true
+func terminalCloseFromError(err error) (websocket.StatusCode, string) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return websocket.StatusNormalClosure, ""
 	}
 
-	status := websocket.CloseStatus(err)
-	if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
-		return true
+	var closeErr websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return closeErr.Code, closeErr.Reason
 	}
 
-	return errors.Is(err, context.Canceled)
+	return websocket.StatusInternalError, "terminal bridge error"
 }
 
 type websocketTerminalConnection struct {
