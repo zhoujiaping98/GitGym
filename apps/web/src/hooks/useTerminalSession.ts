@@ -17,6 +17,7 @@ export function useTerminalSession(
   session: PracticeSession | null,
 ): TerminalSessionState {
   const socketRef = useRef<WebSocket | null>(null);
+  const protocolReadyRef = useRef(false);
   const reconnectTokenRef = useRef(0);
   const sessionId = session?.id ?? null;
   const [status, setStatus] = useState<TerminalSessionState["status"]>("idle");
@@ -28,6 +29,7 @@ export function useTerminalSession(
 
   useEffect(() => {
     reconnectTokenRef.current += 1;
+    protocolReadyRef.current = false;
 
     if (socketRef.current) {
       socketRef.current.close();
@@ -95,6 +97,7 @@ export function useTerminalSession(
         return;
       }
 
+      protocolReadyRef.current = false;
       setStatus("unavailable");
       setError(unavailableSummary);
     });
@@ -104,6 +107,7 @@ export function useTerminalSession(
         return;
       }
 
+      protocolReadyRef.current = false;
       setStatus((currentStatus) =>
         currentStatus === "connecting" || currentStatus === "ready"
           ? "unavailable"
@@ -130,9 +134,17 @@ export function useTerminalSession(
       setReconnectCount((count) => count + 1);
     },
     sendInput: (data) => {
+      if (!protocolReadyRef.current || socketRef.current?.readyState !== 1) {
+        return;
+      }
+
       sendTerminalMessage({ type: "input", data }, socketRef.current);
     },
     resize: (cols, rows) => {
+      if (!protocolReadyRef.current || socketRef.current?.readyState !== 1) {
+        return;
+      }
+
       sendTerminalMessage({ type: "resize", cols, rows }, socketRef.current);
     },
   };

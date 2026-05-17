@@ -20,10 +20,15 @@ type ListenerMap = Record<string, Array<(event?: MessageEvent) => void>>;
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
 
   url: string;
   listeners: ListenerMap = {};
   sent: string[] = [];
+  readyState = MockWebSocket.CONNECTING;
 
   constructor(url: string) {
     this.url = url;
@@ -36,14 +41,27 @@ class MockWebSocket {
   }
 
   close() {
+    this.readyState = MockWebSocket.CLOSED;
     return undefined;
   }
 
   send(data: string) {
+    if (this.readyState !== MockWebSocket.OPEN) {
+      throw new Error("InvalidStateError");
+    }
+
     this.sent.push(data);
   }
 
   emit(type: string, event?: MessageEvent) {
+    if (type === "open") {
+      this.readyState = MockWebSocket.OPEN;
+    }
+
+    if (type === "close") {
+      this.readyState = MockWebSocket.CLOSED;
+    }
+
     for (const listener of this.listeners[type] ?? []) {
       listener(event);
     }
@@ -106,6 +124,14 @@ describe("useTerminalSession", () => {
     });
 
     expect(result.current.status).toBe("connecting");
+    expect(MockWebSocket.instances[0].readyState).toBe(MockWebSocket.OPEN);
+
+    act(() => {
+      result.current.sendInput("pwd\n");
+      result.current.resize(80, 24);
+    });
+
+    expect(MockWebSocket.instances[0].sent).toEqual([]);
 
     act(() => {
       MockWebSocket.instances[0].emit("message", {
