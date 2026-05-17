@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"gitgym/services/api/internal/service"
 	"golang.org/x/oauth2"
@@ -49,6 +50,9 @@ type gitHubEmailResponse struct {
 }
 
 func NewGitHubOAuthClient(clientID string, clientSecret string, redirectURL string, httpClient *http.Client) GitHubOAuthClient {
+	if !HasRequiredGitHubOAuthConfig(clientID, clientSecret, redirectURL) {
+		return nil
+	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -57,6 +61,10 @@ func NewGitHubOAuthClient(clientID string, clientSecret string, redirectURL stri
 		config:     GitHubConfig(clientID, clientSecret, redirectURL),
 		httpClient: httpClient,
 	}
+}
+
+func HasRequiredGitHubOAuthConfig(clientID string, clientSecret string, redirectURL string) bool {
+	return strings.TrimSpace(clientID) != "" && strings.TrimSpace(clientSecret) != "" && strings.TrimSpace(redirectURL) != ""
 }
 
 func (c *gitHubOAuthClient) AuthCodeURL(state string) string {

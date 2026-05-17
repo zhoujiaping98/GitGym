@@ -38,7 +38,7 @@ func RequireSessionCookie(authStore service.UserStore) func(http.Handler) http.H
 				return
 			}
 			if authStore == nil {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				http.Error(w, "auth store is not configured", http.StatusInternalServerError)
 				return
 			}
 

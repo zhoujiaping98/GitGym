@@ -27,6 +27,8 @@ type Dependencies struct {
 var (
 	defaultAuthStoreFactoryForTestsMu sync.RWMutex
 	defaultAuthStoreFactoryForTests   func() service.UserStore
+	openMySQLStoreForTestsMu          sync.RWMutex
+	openMySQLStoreForTests            func(string) (service.UserStore, error)
 )
 
 func NewRouter(deps ...Dependencies) http.Handler {
@@ -123,16 +125,17 @@ func authCallbackURL(apiBaseURL string) string {
 }
 
 func defaultAuthStore(mysqlDSN string) service.UserStore {
-	if strings.TrimSpace(mysqlDSN) != "" {
-		if db, err := store.OpenMySQL(mysqlDSN); err == nil {
-			return store.NewMySQLStore(db)
-		}
-	}
 	defaultAuthStoreFactoryForTestsMu.RLock()
 	factory := defaultAuthStoreFactoryForTests
 	defaultAuthStoreFactoryForTestsMu.RUnlock()
 	if factory != nil {
 		return factory()
+	}
+
+	if strings.TrimSpace(mysqlDSN) != "" {
+		if authStore, err := openMySQLStore(mysqlDSN); err == nil {
+			return authStore
+		}
 	}
 	return nil
 }
@@ -148,4 +151,32 @@ func SetDefaultAuthStoreFactoryForTests(factory func() service.UserStore) func()
 		defaultAuthStoreFactoryForTests = previous
 		defaultAuthStoreFactoryForTestsMu.Unlock()
 	}
+}
+
+func SetOpenMySQLFuncForTests(openFunc func(string) (service.UserStore, error)) func() {
+	openMySQLStoreForTestsMu.Lock()
+	previous := openMySQLStoreForTests
+	openMySQLStoreForTests = openFunc
+	openMySQLStoreForTestsMu.Unlock()
+
+	return func() {
+		openMySQLStoreForTestsMu.Lock()
+		openMySQLStoreForTests = previous
+		openMySQLStoreForTestsMu.Unlock()
+	}
+}
+
+func openMySQLStore(mysqlDSN string) (service.UserStore, error) {
+	openMySQLStoreForTestsMu.RLock()
+	openFunc := openMySQLStoreForTests
+	openMySQLStoreForTestsMu.RUnlock()
+	if openFunc != nil {
+		return openFunc(mysqlDSN)
+	}
+
+	db, err := store.OpenMySQL(mysqlDSN)
+	if err != nil {
+		return nil, err
+	}
+	return store.NewMySQLStore(db), nil
 }

@@ -40,6 +40,10 @@ func GitHubCallback(gitHubOAuthClient oauth.GitHubOAuthClient, authStore service
 			http.Error(w, "github oauth is not configured", http.StatusInternalServerError)
 			return
 		}
+		if strings.TrimSpace(frontendRedirectURL) == "" {
+			http.Error(w, "frontend redirect is not configured", http.StatusInternalServerError)
+			return
+		}
 
 		stateCookie, err := r.Cookie(oauthStateCookieName)
 		if err != nil || stateCookie.Value == "" || r.URL.Query().Get("state") != stateCookie.Value {

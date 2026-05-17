@@ -87,6 +87,49 @@ func TestGitHubLoginRedirectsToGitHub(t *testing.T) {
 	}
 }
 
+func TestDefaultRouterUsesTestAuthStoreBeforeMySQLOpen(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "user:pass@tcp(127.0.0.1:65000)/gitgym")
+
+	openMySQLCalls := 0
+	restoreOpenMySQL := httpx.SetOpenMySQLFuncForTests(func(string) (service.UserStore, error) {
+		openMySQLCalls++
+		return nil, errors.New("unexpected mysql open")
+	})
+	t.Cleanup(restoreOpenMySQL)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "session-token"})
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter().ServeHTTP(rec, req)
+
+	if openMySQLCalls != 0 {
+		t.Fatalf("expected test auth store seam to win before mysql open, got %d mysql open attempts", openMySQLCalls)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected default test auth store to serve auth/me, got %d with body %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGitHubLoginReturnsServerErrorWhenOAuthConfigIncomplete(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/github/login", nil)
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter(httpx.Dependencies{
+		AuthConfig: config.Config{
+			APIBaseURL:          "http://127.0.0.1:8080",
+			FrontendRedirectURL: "http://127.0.0.1:5173",
+		},
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "not configured") {
+		t.Fatalf("expected clear configuration error, got %q", rec.Body.String())
+	}
+}
+
 func TestGitHubCallbackRejectsMissingState(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/github/callback?code=abc&state=bad", nil)
 	rec := httptest.NewRecorder()
@@ -102,6 +145,27 @@ func TestGitHubCallbackRejectsMissingState(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestGitHubCallbackReturnsServerErrorWhenOAuthConfigIncomplete(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/github/callback?code=abc123&state=expected-state", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_oauth_state", Value: "expected-state"})
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter(httpx.Dependencies{
+		AuthStore: &stubUserStore{},
+		AuthConfig: config.Config{
+			APIBaseURL:          "http://127.0.0.1:8080",
+			FrontendRedirectURL: "http://127.0.0.1:5173",
+		},
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "not configured") {
+		t.Fatalf("expected clear configuration error, got %q", rec.Body.String())
 	}
 }
 
@@ -228,7 +292,7 @@ func TestAuthMeReturnsUnauthorizedWithoutPersistedSession(t *testing.T) {
 	}
 }
 
-func TestAuthMeDefaultRouterRejectsCannedSessionCookie(t *testing.T) {
+func TestAuthMeDefaultRouterReturnsServerErrorWithoutAuthBacking(t *testing.T) {
 	restore := httpx.SetDefaultAuthStoreFactoryForTests(nil)
 	t.Cleanup(restore)
 
@@ -238,8 +302,11 @@ func TestAuthMeDefaultRouterRejectsCannedSessionCookie(t *testing.T) {
 
 	httpx.NewRouter().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", rec.Code)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "not configured") {
+		t.Fatalf("expected clear configuration error, got %q", rec.Body.String())
 	}
 }
 
@@ -295,6 +362,43 @@ func TestAuthMeReturnsUserJSONForPersistedSession(t *testing.T) {
 	}
 	if payload.User.GitHubLogin != "octocat" || payload.User.DisplayName != "The Octocat" {
 		t.Fatalf("unexpected auth/me identity payload: %+v", payload.User)
+	}
+}
+
+func TestAuthMeReturnsServerErrorWhenAuthStoreUnavailableAfterBypass(t *testing.T) {
+	restore := httpx.SetDefaultAuthStoreFactoryForTests(nil)
+	t.Cleanup(restore)
+	t.Setenv("DEV_AUTH_BYPASS", "true")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.RemoteAddr = "127.0.0.1:45678"
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "not configured") {
+		t.Fatalf("expected clear configuration error, got %q", rec.Body.String())
+	}
+}
+
+func TestAuthMeReturnsServerErrorWhenAuthStoreUnavailableWithSessionCookie(t *testing.T) {
+	restore := httpx.SetDefaultAuthStoreFactoryForTests(nil)
+	t.Cleanup(restore)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "persisted-session-token"})
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "not configured") {
+		t.Fatalf("expected clear configuration error, got %q", rec.Body.String())
 	}
 }
 
