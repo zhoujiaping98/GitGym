@@ -16,6 +16,8 @@ const previewTerminal: TerminalSessionState = {
   terminalUrl: null,
   error: null,
   reconnect: () => undefined,
+  sendInput: () => undefined,
+  resize: () => undefined,
 };
 
 export function Workbench({
