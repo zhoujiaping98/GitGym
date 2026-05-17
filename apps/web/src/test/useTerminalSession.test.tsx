@@ -124,6 +124,7 @@ describe("useTerminalSession", () => {
     });
 
     expect(result.current.status).toBe("connecting");
+<<<<<<< HEAD
     expect(MockWebSocket.instances[0].readyState).toBe(MockWebSocket.OPEN);
 
     act(() => {
@@ -132,6 +133,8 @@ describe("useTerminalSession", () => {
     });
 
     expect(MockWebSocket.instances[0].sent).toEqual([]);
+=======
+>>>>>>> 5ce0533 (test: tighten terminal protocol contract)
 
     act(() => {
       MockWebSocket.instances[0].emit("message", {
