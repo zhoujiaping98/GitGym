@@ -7,10 +7,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	httpx "gitgym/services/api/internal/http"
 	"gitgym/services/api/internal/service"
 	"gitgym/services/api/internal/store"
+	mysql "github.com/go-sql-driver/mysql"
 )
 
 func TestGitHubLoginRouteIsMountedAsStub(t *testing.T) {
@@ -115,7 +117,7 @@ func TestNewSessionTokenReturnsHexAndStableHash(t *testing.T) {
 }
 
 func TestBrowserSessionLookupQueryRequiresUnrevokedAndUnexpiredSession(t *testing.T) {
-	query := store.BrowserSessionLookupQueryForTest()
+	query := store.BrowserSessionLookupQuery()
 
 	if !strings.Contains(query, "revoked_at IS NULL") {
 		t.Fatalf("expected revoked guard in query, got %q", query)
@@ -126,9 +128,27 @@ func TestBrowserSessionLookupQueryRequiresUnrevokedAndUnexpiredSession(t *testin
 }
 
 func TestBrowserSessionLookupErrorMapsNoRowsToStableNotFound(t *testing.T) {
-	err := store.MapBrowserSessionLookupErrorForTest(sql.ErrNoRows)
+	err := store.MapBrowserSessionLookupError(sql.ErrNoRows)
 
 	if !errors.Is(err, service.ErrBrowserSessionNotFound) {
 		t.Fatalf("expected browser session not found, got %v", err)
+	}
+}
+
+func TestNormalizeMySQLDSNEnablesParseTimeAndUTC(t *testing.T) {
+	normalized, err := store.NormalizeMySQLDSN("user:pass@tcp(localhost:3306)/gitgym")
+	if err != nil {
+		t.Fatalf("expected normalized dsn, got error: %v", err)
+	}
+
+	cfg, err := mysql.ParseDSN(normalized)
+	if err != nil {
+		t.Fatalf("expected parseable dsn, got error: %v", err)
+	}
+	if !cfg.ParseTime {
+		t.Fatalf("expected ParseTime=true in %q", normalized)
+	}
+	if cfg.Loc != time.UTC {
+		t.Fatalf("expected UTC location, got %v", cfg.Loc)
 	}
 }

@@ -8,7 +8,7 @@ import (
 
 	"gitgym/services/api/internal/domain"
 	"gitgym/services/api/internal/service"
-	_ "github.com/go-sql-driver/mysql"
+	mysql "github.com/go-sql-driver/mysql"
 )
 
 const (
@@ -48,7 +48,12 @@ func NewMySQLStore(db *sql.DB) *MySQLStore {
 }
 
 func OpenMySQL(dsn string) (*sql.DB, error) {
-	db, err := sql.Open("mysql", dsn)
+	normalizedDSN, err := NormalizeMySQLDSN(dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	db, err := sql.Open("mysql", normalizedDSN)
 	if err != nil {
 		return nil, fmt.Errorf("open mysql: %w", err)
 	}
@@ -131,11 +136,22 @@ func (s *MySQLStore) RevokeBrowserSession(ctx context.Context, tokenHash string)
 	return nil
 }
 
-func BrowserSessionLookupQueryForTest() string {
+func NormalizeMySQLDSN(dsn string) (string, error) {
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return "", fmt.Errorf("parse mysql dsn: %w", err)
+	}
+
+	cfg.ParseTime = true
+	cfg.Loc = time.UTC
+	return cfg.FormatDSN(), nil
+}
+
+func BrowserSessionLookupQuery() string {
 	return browserSessionLookupQuery
 }
 
-func MapBrowserSessionLookupErrorForTest(err error) error {
+func MapBrowserSessionLookupError(err error) error {
 	return mapBrowserSessionLookupError(err)
 }
 
