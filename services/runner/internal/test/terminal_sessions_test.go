@@ -3,7 +3,11 @@ package test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
+	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,14 +24,18 @@ func TestTerminalManagerStartsShellForWorkspace(t *testing.T) {
 		t.Fatalf("acquire terminal session: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := manager.Release(workspace.ID); err != nil {
-			t.Fatalf("release terminal session: %v", err)
-		}
+		releaseTerminalSession(t, manager, session, workspace.ID)
 	})
 
-	output := readTerminalUntil(t, session, `Write-Output (Get-Location).Path`+"\r\n", workspace.Path)
-	if !strings.Contains(output, workspace.Path) {
-		t.Fatalf("expected terminal output to include workspace path %q, got %q", workspace.Path, output)
+	marker := terminalMarker("cwd")
+	pattern := terminalLinePattern(marker, `([^\r\n]+)`)
+	output := readTerminalUntilMatch(t, session, shellPrintWorkingDirectory(marker), pattern)
+	match := pattern.FindStringSubmatch(output)
+	if len(match) != 2 {
+		t.Fatalf("expected terminal output to include working directory marker %q, got %q", marker, output)
+	}
+	if !samePath(match[1], workspace.Path) {
+		t.Fatalf("expected shell working directory %q, got %q", workspace.Path, match[1])
 	}
 
 	reused, err := manager.Acquire(context.Background(), workspace.Path, workspace.ID)
@@ -56,13 +64,13 @@ func TestTerminalManagerWritesInputToPTY(t *testing.T) {
 		t.Fatalf("acquire terminal session: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := manager.Release(workspace.ID); err != nil {
-			t.Fatalf("release terminal session: %v", err)
-		}
+		releaseTerminalSession(t, manager, session, workspace.ID)
 	})
 
-	output := readTerminalUntil(t, session, `Write-Output "__GITGYM_WRITE_INPUT__"`+"\r\n", "__GITGYM_WRITE_INPUT__")
-	if !strings.Contains(output, "__GITGYM_WRITE_INPUT__") {
+	marker := terminalMarker("echo")
+	pattern := terminalLinePattern(marker, `__GITGYM_WRITE_INPUT__`)
+	output := readTerminalUntilMatch(t, session, shellPrintLine(marker, "__GITGYM_WRITE_INPUT__"), pattern)
+	if !pattern.MatchString(output) {
 		t.Fatalf("expected terminal output to include echoed marker, got %q", output)
 	}
 }
@@ -76,13 +84,19 @@ func TestTerminalManagerResizesPTY(t *testing.T) {
 		t.Fatalf("acquire terminal session: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := manager.Release(workspace.ID); err != nil {
-			t.Fatalf("release terminal session: %v", err)
-		}
+		releaseTerminalSession(t, manager, session, workspace.ID)
 	})
 
-	if err := session.Resize(120, 40); err != nil {
+	initialCols, initialRows := readTerminalSize(t, session)
+	targetCols, targetRows := resizedDimensions(initialCols, initialRows)
+
+	if err := session.Resize(targetCols, targetRows); err != nil {
 		t.Fatalf("resize terminal session: %v", err)
+	}
+
+	resizedCols, resizedRows := readTerminalSize(t, session)
+	if resizedCols != targetCols || resizedRows != targetRows {
+		t.Fatalf("expected terminal size %dx%d after resize, got %dx%d (initial %dx%d)", targetCols, targetRows, resizedCols, resizedRows, initialCols, initialRows)
 	}
 }
 
@@ -105,7 +119,7 @@ func TestTerminalManagerClosesShellOnRelease(t *testing.T) {
 
 	waitDone := make(chan error, 1)
 	go func() {
-		waitDone <- session.Cmd.Wait()
+		waitDone <- session.Wait()
 	}()
 
 	select {
@@ -119,7 +133,7 @@ func TestTerminalManagerClosesShellOnRelease(t *testing.T) {
 	}
 }
 
-func readTerminalUntil(t *testing.T, session *engine.TerminalSession, input string, want string) string {
+func readTerminalUntilMatch(t *testing.T, session *engine.TerminalSession, input string, want *regexp.Regexp) string {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -130,7 +144,7 @@ func readTerminalUntil(t *testing.T, session *engine.TerminalSession, input stri
 	go func() {
 		readDone <- session.ReadLoop(ctx, func(chunk []byte) error {
 			builder.Write(chunk)
-			if strings.Contains(builder.String(), want) {
+			if want.MatchString(builder.String()) {
 				cancel()
 			}
 			return nil
@@ -147,9 +161,107 @@ func readTerminalUntil(t *testing.T, session *engine.TerminalSession, input stri
 	}
 
 	output := builder.String()
-	if !strings.Contains(output, want) {
-		t.Fatalf("expected terminal output to include %q, got %q", want, output)
+	if !want.MatchString(output) {
+		t.Fatalf("expected terminal output to match %q, got %q", want.String(), output)
 	}
 
 	return output
+}
+
+func readTerminalSize(t *testing.T, session *engine.TerminalSession) (uint16, uint16) {
+	t.Helper()
+
+	marker := terminalMarker("size")
+	pattern := terminalLinePattern(marker, `(\d+)x(\d+)`)
+	output := readTerminalUntilMatch(t, session, shellPrintSize(marker), pattern)
+	match := pattern.FindStringSubmatch(output)
+	if len(match) != 3 {
+		t.Fatalf("expected terminal output to include size marker %q, got %q", marker, output)
+	}
+
+	cols, err := strconv.ParseUint(match[1], 10, 16)
+	if err != nil {
+		t.Fatalf("parse terminal cols from %q: %v", match[1], err)
+	}
+	rows, err := strconv.ParseUint(match[2], 10, 16)
+	if err != nil {
+		t.Fatalf("parse terminal rows from %q: %v", match[2], err)
+	}
+
+	return uint16(cols), uint16(rows)
+}
+
+func releaseTerminalSession(t *testing.T, manager *engine.TerminalManager, session *engine.TerminalSession, workspaceID string) {
+	t.Helper()
+
+	if err := manager.Release(workspaceID); err != nil {
+		t.Fatalf("release terminal session: %v", err)
+	}
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- session.Wait()
+	}()
+
+	select {
+	case err := <-waitDone:
+		var exitErr *exec.ExitError
+		if err != nil && !errors.As(err, &exitErr) {
+			t.Fatalf("wait for terminal session exit: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for terminal session to exit")
+	}
+}
+
+func resizedDimensions(cols uint16, rows uint16) (uint16, uint16) {
+	targetCols := cols + 12
+	targetRows := rows + 6
+	if targetCols == cols {
+		targetCols++
+	}
+	if targetRows == rows {
+		targetRows++
+	}
+	return targetCols, targetRows
+}
+
+func terminalMarker(prefix string) string {
+	return fmt.Sprintf("__GITGYM_%s_%d__", strings.ToUpper(prefix), time.Now().UnixNano())
+}
+
+func terminalLinePattern(marker string, valuePattern string) *regexp.Regexp {
+	return regexp.MustCompile(`(?:^|[\r\n])(?:\x1b\[[0-9;?]*[A-Za-z])*` + regexp.QuoteMeta(marker) + `:` + valuePattern + `(?:[\r\n]|$)`)
+}
+
+func shellPrintWorkingDirectory(marker string) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("Write-Output \"%s:$((Get-Location).Path)\"\r\n", marker)
+	}
+
+	return fmt.Sprintf("printf '%s:%s\\n' '%s' \"$PWD\"\n", marker, "%s", marker)
+}
+
+func shellPrintLine(marker string, value string) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("Write-Output \"%s:%s\"\r\n", marker, value)
+	}
+
+	return fmt.Sprintf("printf '%s:%s\\n'\n", marker, value)
+}
+
+func shellPrintSize(marker string) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("Write-Output \"%s:$($Host.UI.RawUI.WindowSize.Width)x$($Host.UI.RawUI.WindowSize.Height)\"\r\n", marker)
+	}
+
+	return fmt.Sprintf("set -- $(stty size); printf '%s:%sx%s\\n' '%s' \"$2\" \"$1\"\n", marker, "%s", "%s", marker)
+}
+
+func samePath(got string, want string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(got, want)
+	}
+
+	return got == want
 }

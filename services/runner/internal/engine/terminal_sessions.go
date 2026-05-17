@@ -10,7 +10,8 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/creack/pty"
+	unixpty "github.com/creack/pty"
+	winpty "github.com/threatexpert/go-winpty"
 )
 
 type TerminalManager struct {
@@ -21,17 +22,64 @@ type TerminalManager struct {
 type TerminalSession struct {
 	WorkspaceID   string
 	WorkspacePath string
-	Cmd           *exec.Cmd
-	PTY           *os.File
 
 	mu          sync.Mutex
-	stdin       io.WriteCloser
+	backend     terminalBackend
+	process     *os.Process
+	wait        func() error
 	subscribers map[int]chan []byte
 	nextID      int
 	closed      bool
 	closeErr    error
+	backendErr  error
 	done        chan struct{}
 	doneOnce    sync.Once
+	backendOnce sync.Once
+}
+
+type terminalBackend interface {
+	io.ReadWriteCloser
+	Resize(cols uint16, rows uint16) error
+}
+
+type unixTerminalBackend struct {
+	file *os.File
+}
+
+func (b *unixTerminalBackend) Read(p []byte) (int, error) {
+	return b.file.Read(p)
+}
+
+func (b *unixTerminalBackend) Write(p []byte) (int, error) {
+	return b.file.Write(p)
+}
+
+func (b *unixTerminalBackend) Close() error {
+	return b.file.Close()
+}
+
+func (b *unixTerminalBackend) Resize(cols uint16, rows uint16) error {
+	return unixpty.Setsize(b.file, &unixpty.Winsize{Cols: cols, Rows: rows})
+}
+
+type windowsTerminalBackend struct {
+	pty winpty.Pty
+}
+
+func (b *windowsTerminalBackend) Read(p []byte) (int, error) {
+	return b.pty.Read(p)
+}
+
+func (b *windowsTerminalBackend) Write(p []byte) (int, error) {
+	return b.pty.Write(p)
+}
+
+func (b *windowsTerminalBackend) Close() error {
+	return b.pty.Close()
+}
+
+func (b *windowsTerminalBackend) Resize(cols uint16, rows uint16) error {
+	return b.pty.Resize(int(cols), int(rows))
 }
 
 func NewTerminalManager() *TerminalManager {
@@ -50,8 +98,12 @@ func (m *TerminalManager) Acquire(ctx context.Context, workspacePath string, wor
 		m.sessions = make(map[string]*TerminalSession)
 	}
 	if session, ok := m.sessions[workspaceID]; ok {
-		m.mu.Unlock()
-		return session, nil
+		if session.isClosed() {
+			delete(m.sessions, workspaceID)
+		} else {
+			m.mu.Unlock()
+			return session, nil
+		}
 	}
 	m.mu.Unlock()
 
@@ -64,8 +116,12 @@ func (m *TerminalManager) Acquire(ctx context.Context, workspacePath string, wor
 	defer m.mu.Unlock()
 
 	if existing, ok := m.sessions[workspaceID]; ok {
-		_ = session.close()
-		return existing, nil
+		if existing.isClosed() {
+			delete(m.sessions, workspaceID)
+		} else {
+			_ = session.close()
+			return existing, nil
+		}
 	}
 
 	m.sessions[workspaceID] = session
@@ -95,23 +151,35 @@ func (s *TerminalSession) WriteInput(data string) error {
 		}
 		return os.ErrClosed
 	}
-	writer := s.stdin
+	backend := s.backend
 	s.mu.Unlock()
 
-	if writer == nil {
+	if backend == nil {
 		return errors.New("terminal session does not accept input")
 	}
 
-	_, err := io.WriteString(writer, data)
+	_, err := io.WriteString(backend, data)
 	return err
 }
 
 func (s *TerminalSession) Resize(cols uint16, rows uint16) error {
-	if s.PTY == nil {
-		return nil
+	s.mu.Lock()
+	if s.closed {
+		err := s.closeErr
+		s.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		return os.ErrClosed
+	}
+	backend := s.backend
+	s.mu.Unlock()
+
+	if backend == nil {
+		return errors.New("terminal session does not support resizing")
 	}
 
-	return pty.Setsize(s.PTY, &pty.Winsize{Cols: cols, Rows: rows})
+	return backend.Resize(cols, rows)
 }
 
 func (s *TerminalSession) ReadLoop(ctx context.Context, onData func([]byte) error) error {
@@ -146,6 +214,25 @@ func (s *TerminalSession) ReadLoop(ctx context.Context, onData func([]byte) erro
 	}
 }
 
+func (s *TerminalSession) Wait() error {
+	s.mu.Lock()
+	wait := s.wait
+	s.mu.Unlock()
+
+	if wait == nil {
+		return errors.New("terminal session does not have a running process")
+	}
+
+	return wait()
+}
+
+func (s *TerminalSession) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.closed
+}
+
 func ensureWorkspacePath(workspacePath string) error {
 	info, err := os.Stat(workspacePath)
 	if err != nil {
@@ -161,70 +248,93 @@ func ensureWorkspacePath(workspacePath string) error {
 }
 
 func startTerminalSession(ctx context.Context, workspacePath string, workspaceID string) (*TerminalSession, error) {
-	cmd := shellCommand(ctx)
-	cmd.Dir = workspacePath
-
 	session := &TerminalSession{
 		WorkspaceID:   workspaceID,
 		WorkspacePath: workspacePath,
-		Cmd:           cmd,
 		subscribers:   make(map[int]chan []byte),
 		done:          make(chan struct{}),
 	}
 
 	if runtime.GOOS == "windows" {
-		if err := startWindowsShell(session); err != nil {
+		if err := startWindowsShell(ctx, session); err != nil {
 			return nil, err
 		}
 		return session, nil
 	}
 
-	ptmx, err := pty.Start(cmd)
-	if err != nil {
+	if err := startUnixShell(ctx, session); err != nil {
 		return nil, err
 	}
 
-	session.PTY = ptmx
-	session.stdin = ptmx
-	go session.pump(ptmx)
 	return session, nil
 }
 
-func shellCommand(ctx context.Context) *exec.Cmd {
-	if runtime.GOOS == "windows" {
-		return exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile")
-	}
-	return exec.CommandContext(ctx, "sh", "-l")
-}
-
-func startWindowsShell(session *TerminalSession) error {
-	stdin, err := session.Cmd.StdinPipe()
+func startUnixShell(ctx context.Context, session *TerminalSession) error {
+	command, args, err := shellCommand()
 	if err != nil {
 		return err
 	}
 
-	stdout, err := session.Cmd.StdoutPipe()
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Dir = session.WorkspacePath
+
+	ptmx, err := unixpty.Start(cmd)
 	if err != nil {
-		_ = stdin.Close()
 		return err
 	}
 
-	if err := session.Cmd.Start(); err != nil {
-		_ = stdin.Close()
-		_ = stdout.Close()
-		return err
-	}
+	session.mu.Lock()
+	session.backend = &unixTerminalBackend{file: ptmx}
+	session.process = cmd.Process
+	session.wait = cmd.Wait
+	session.mu.Unlock()
 
-	session.stdin = stdin
-	go session.pump(stdout)
+	go session.pump(session.backend)
 	return nil
 }
 
-func (s *TerminalSession) pump(reader io.ReadCloser) {
-	defer func() {
-		_ = reader.Close()
-	}()
+func startWindowsShell(ctx context.Context, session *TerminalSession) error {
+	pty, err := winpty.New()
+	if err != nil {
+		return err
+	}
 
+	command, args, err := shellCommand()
+	if err != nil {
+		_ = pty.Close()
+		return err
+	}
+	cmd := pty.CommandContext(ctx, command, args...)
+	cmd.Dir = session.WorkspacePath
+
+	if err := cmd.Start(); err != nil {
+		_ = pty.Close()
+		return err
+	}
+
+	session.mu.Lock()
+	session.backend = &windowsTerminalBackend{pty: pty}
+	session.process = cmd.Process
+	session.wait = cmd.Wait
+	session.mu.Unlock()
+
+	go session.pump(session.backend)
+	return nil
+}
+
+func shellCommand() (string, []string, error) {
+	if runtime.GOOS == "windows" {
+		command, err := exec.LookPath("powershell.exe")
+		if err != nil {
+			return "", nil, err
+		}
+		return command, []string{"-NoLogo"}, nil
+	}
+
+	return "sh", []string{"-l"}, nil
+}
+
+func (s *TerminalSession) pump(reader io.ReadCloser) {
 	buffer := make([]byte, 4096)
 	for {
 		n, err := reader.Read(buffer)
@@ -233,6 +343,7 @@ func (s *TerminalSession) pump(reader io.ReadCloser) {
 		}
 		if err != nil {
 			s.finish(err)
+			_ = s.closeBackend()
 			return
 		}
 	}
@@ -287,17 +398,19 @@ func (s *TerminalSession) subscribe() (<-chan []byte, func(), error) {
 func (s *TerminalSession) close() error {
 	s.finish(os.ErrClosed)
 
+	s.mu.Lock()
+	backend := s.backend
+	process := s.process
+	s.mu.Unlock()
+
 	var releaseErr error
-	if s.stdin != nil {
-		releaseErr = errors.Join(releaseErr, s.stdin.Close())
-	}
-	if s.PTY != nil {
-		releaseErr = errors.Join(releaseErr, s.PTY.Close())
-	}
-	if s.Cmd != nil && s.Cmd.Process != nil {
-		if err := s.Cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if process != nil {
+		if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			releaseErr = errors.Join(releaseErr, err)
 		}
+	}
+	if backend != nil {
+		releaseErr = errors.Join(releaseErr, s.closeBackend())
 	}
 
 	return releaseErr
@@ -316,4 +429,18 @@ func (s *TerminalSession) finish(err error) {
 
 		close(s.done)
 	})
+}
+
+func (s *TerminalSession) closeBackend() error {
+	s.backendOnce.Do(func() {
+		s.mu.Lock()
+		backend := s.backend
+		s.mu.Unlock()
+
+		if backend != nil {
+			s.backendErr = backend.Close()
+		}
+	})
+
+	return s.backendErr
 }
