@@ -132,7 +132,6 @@ export function useTerminalSession(
       setReconnectCount((count) => count + 1);
     },
     sendInput: (data) => {
-<<<<<<< HEAD
       if (!protocolReadyRef.current || socketRef.current?.readyState !== 1) {
         return;
       }
@@ -144,11 +143,6 @@ export function useTerminalSession(
         return;
       }
 
-=======
-      sendTerminalMessage({ type: "input", data }, socketRef.current);
-    },
-    resize: (cols, rows) => {
->>>>>>> 5ce0533 (test: tighten terminal protocol contract)
       sendTerminalMessage({ type: "resize", cols, rows }, socketRef.current);
     },
   };
