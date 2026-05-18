@@ -242,8 +242,44 @@ func (s *TerminalSession) WriteInput(data string) error {
 		return errors.New("terminal session does not accept input")
 	}
 
-	_, err := io.WriteString(backend, data)
-	return err
+	for _, chunk := range splitTerminalInputChunks(data) {
+		if _, err := io.WriteString(backend, chunk); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func splitTerminalInputChunks(data string) []string {
+	if data == "" {
+		return nil
+	}
+
+	chunks := make([]string, 0, 4)
+	start := 0
+	for index := 0; index < len(data); index++ {
+		switch data[index] {
+		case '\r':
+			end := index + 1
+			if end < len(data) && data[end] == '\n' {
+				end++
+			}
+			chunks = append(chunks, data[start:end])
+			start = end
+			index = end - 1
+		case '\n':
+			end := index + 1
+			chunks = append(chunks, data[start:end])
+			start = end
+		}
+	}
+
+	if start < len(data) {
+		chunks = append(chunks, data[start:])
+	}
+
+	return chunks
 }
 
 func (s *TerminalSession) Resize(cols uint16, rows uint16) error {
