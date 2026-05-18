@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildServiceSpecs } from "./dev-orchestrator.mjs";
+import {
+  buildServiceSpecs,
+  isDirectExecution,
+} from "./dev-orchestrator.mjs";
 
 test("buildServiceSpecs returns runner api and web commands in startup order", () => {
   const specs = buildServiceSpecs("win32");
@@ -23,4 +26,14 @@ test("buildServiceSpecs uses npm on non-windows platforms", () => {
   assert.equal(specs[0].command, "npm");
   assert.equal(specs[1].command, "npm");
   assert.equal(specs[2].command, "npm");
+});
+
+test("isDirectExecution recognizes Windows script paths", () => {
+  assert.equal(
+    isDirectExecution(
+      "file:///D:/Project/GitGym/scripts/dev-orchestrator.mjs",
+      "D:\\Project\\GitGym\\scripts\\dev-orchestrator.mjs",
+    ),
+    true,
+  );
 });

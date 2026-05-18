@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 export function buildServiceSpecs(platform = process.platform) {
   const npmCommand = platform === "win32" ? "npm.cmd" : "npm";
@@ -9,6 +10,17 @@ export function buildServiceSpecs(platform = process.platform) {
     { name: "api", command: npmCommand, args: ["run", "api:dev"] },
     { name: "web", command: npmCommand, args: ["run", "web:dev"] },
   ];
+}
+
+export function isDirectExecution(
+  importMetaUrl,
+  scriptPath = process.argv[1],
+) {
+  if (!scriptPath) {
+    return false;
+  }
+
+  return importMetaUrl === pathToFileURL(scriptPath).href;
 }
 
 function log(prefix, message) {
@@ -64,6 +76,7 @@ async function main() {
       cwd: process.cwd(),
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
+      shell: process.platform === "win32",
       windowsHide: false,
     });
 
@@ -95,6 +108,6 @@ async function main() {
   }
 }
 
-if (import.meta.url === new URL(process.argv[1], "file://").href) {
+if (isDirectExecution(import.meta.url)) {
   void main();
 }
