@@ -436,11 +436,7 @@ func shellCommand() (string, []string, error) {
 			"-NoProfile",
 			"-NoExit",
 			"-Command",
-			fmt.Sprintf(
-				"$ErrorActionPreference='SilentlyContinue'; $global:GitGymOriginalPrompt = $function:prompt; function global:prompt { $gitgymSuccess = $?; $gitgymExit = if ($gitgymSuccess) { 0 } elseif ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -is [int]) { [int]$global:LASTEXITCODE } else { 1 }; $gitgymPrompt = if ($global:GitGymOriginalPrompt) { & $global:GitGymOriginalPrompt } else { 'PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }; if ($gitgymPrompt -match '^\\s*>>') { [Console]::Out.WriteLine('%s') } else { [Console]::Out.WriteLine('%s:' + $gitgymExit) }; $gitgymPrompt }; Import-Module PSReadLine -ErrorAction SilentlyContinue; Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction SilentlyContinue",
-				TerminalContinuationPromptMarker,
-				TerminalCommandExitMarker,
-			),
+			powershellPromptBootstrap(),
 		}, nil
 	}
 
@@ -456,10 +452,56 @@ func terminalShellEnvironment() []string {
 		return nil
 	}
 
-	prompt := fmt.Sprintf("$(printf '%s:%%s\\n' \"$?\")$ ", TerminalCommandExitMarker)
 	return []string{
-		"PS1=" + prompt,
+		"PS1=$ ",
+		"HISTFILE=/dev/null",
+		"HISTCONTROL=",
+		"PROMPT_COMMAND=" + posixPromptCommandBootstrap(),
 	}
+}
+
+func powershellPromptBootstrap() string {
+	return fmt.Sprintf(
+		"$ErrorActionPreference='SilentlyContinue'; "+
+			"$global:GitGymOriginalPrompt = $function:prompt; "+
+			"$global:GitGymLastSubmittedCommand = $null; "+
+			"$global:GitGymLastSubmittedSequence = 0; "+
+			"$global:GitGymLastReportedSequence = 0; "+
+			"function global:GitGymWriteCommandMarker([int]$gitgymExit, [string]$gitgymPrompt) { "+
+			"if ($gitgymPrompt -match '^\\s*>>') { [Console]::Out.WriteLine('%s'); return }; "+
+			"if ([int]$global:GitGymLastSubmittedSequence -le [int]$global:GitGymLastReportedSequence) { return }; "+
+			"$global:GitGymLastReportedSequence = [int]$global:GitGymLastSubmittedSequence; "+
+			"$gitgymCommand = [string]$global:GitGymLastSubmittedCommand; "+
+			"if ([string]::IsNullOrWhiteSpace($gitgymCommand)) { return }; "+
+			"$gitgymEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($gitgymCommand)); "+
+			"[Console]::Out.WriteLine('%s:' + $gitgymExit + ':' + $gitgymEncoded) }; "+
+			"function global:prompt { "+
+			"$gitgymSuccess = $?; "+
+			"$gitgymExit = if ($gitgymSuccess) { 0 } elseif ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -is [int]) { [int]$global:LASTEXITCODE } else { 1 }; "+
+			"$gitgymPrompt = if ($global:GitGymOriginalPrompt) { & $global:GitGymOriginalPrompt } else { 'PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }; "+
+			"GitGymWriteCommandMarker $gitgymExit $gitgymPrompt; "+
+			"$gitgymPrompt }; "+
+			"Import-Module PSReadLine -ErrorAction SilentlyContinue; "+
+			"Set-PSReadLineOption -AddToHistoryHandler { param($line) $global:GitGymLastSubmittedCommand = $line; $global:GitGymLastSubmittedSequence = [int]$global:GitGymLastSubmittedSequence + 1; return $true } -ErrorAction SilentlyContinue; "+
+			"Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction SilentlyContinue",
+		TerminalContinuationPromptMarker,
+		TerminalCommandExitMarker,
+	)
+}
+
+func posixPromptCommandBootstrap() string {
+	return fmt.Sprintf(
+		"shopt -s cmdhist lithist; __gitgym_exit=$?; __gitgym_history_id=${HISTCMD:-}; "+
+			"if [ -n \"$__gitgym_history_id\" ] && [ \"$__gitgym_history_id\" != \"$__GITGYM_LAST_HISTORY_ID\" ]; then "+
+			"__gitgym_command=$(fc -ln -1); "+
+			"if [ -n \"$__gitgym_command\" ]; then "+
+			"__gitgym_encoded=$(printf %%s \"$__gitgym_command\" | base64 | tr -d '\\n'); "+
+			"printf '%s:%%s:%%s\\n' \"$__gitgym_exit\" \"$__gitgym_encoded\"; "+
+			"__GITGYM_LAST_HISTORY_ID=\"$__gitgym_history_id\"; "+
+			"fi; "+
+			"fi",
+		TerminalCommandExitMarker,
+	)
 }
 
 func (s *TerminalSession) pump(reader io.ReadCloser) {

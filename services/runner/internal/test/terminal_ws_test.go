@@ -223,6 +223,46 @@ func TestTerminalWebSocketWaitsForPromptBeforeEmittingCommandCompletionFrames(t 
 	assertTerminalDoesNotEmitCommandLifecycleFrame(t, conn, 300*time.Millisecond)
 }
 
+func TestTerminalWebSocketTracksSameFramePastedCommandsFromPromptMetadata(t *testing.T) {
+	workspace := createGitWorkspace(t)
+	manager := engine.NewTerminalManager()
+	conn := dialTerminalWebSocket(t, workspace.ID, filepath.Dir(workspace.Path), manager)
+	defer closeTerminalWebSocket(t, conn)
+	t.Cleanup(func() {
+		releaseManagedTerminalSocketSession(t, manager, workspace)
+	})
+
+	assertTerminalReadyFrame(t, conn)
+
+	firstMarker := terminalMarker("ws-paste-one")
+	secondMarker := terminalMarker("ws-paste-two")
+	pastedCommands := shellPrintLine(firstMarker, "__GITGYM_PASTE_ONE__") +
+		shellPrintLine(secondMarker, "__GITGYM_PASTE_TWO__")
+
+	if err := wsjson.Write(context.Background(), conn, engine.TerminalClientMessage{
+		Type: "input",
+		Data: pastedCommands,
+	}); err != nil {
+		t.Fatalf("write same-frame terminal commands: %v", err)
+	}
+
+	assertTerminalCommandCompletionWithOutput(
+		t,
+		conn,
+		strings.TrimSpace(shellPrintLine(firstMarker, "__GITGYM_PASTE_ONE__")),
+		terminalLinePattern(firstMarker, "__GITGYM_PASTE_ONE__"),
+		0,
+	)
+
+	assertTerminalCommandCompletionWithOutput(
+		t,
+		conn,
+		strings.TrimSpace(shellPrintLine(secondMarker, "__GITGYM_PASTE_TWO__")),
+		terminalLinePattern(secondMarker, "__GITGYM_PASTE_TWO__"),
+		0,
+	)
+}
+
 func dialTerminalWebSocket(t *testing.T, workspaceID string, workRoot string, manager *engine.TerminalManager) *websocket.Conn {
 	t.Helper()
 

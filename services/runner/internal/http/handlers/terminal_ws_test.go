@@ -1,94 +1,67 @@
 package handlers
 
 import (
-	"runtime"
+	"encoding/base64"
+	"strconv"
 	"testing"
+
+	"gitgym/services/runner/internal/engine"
 )
 
-func TestSubmittedCommandTrackerQueuesMultipleTopLevelCommandsFromSingleFrame(t *testing.T) {
-	tracker := newSubmittedCommandTracker()
+func TestCommandCompletionTrackerPrefersShellReportedCommandMetadata(t *testing.T) {
+	completionTracker := newCommandCompletionTracker()
 
-	tracker.ingest("pwd\r\nls\r\n")
-
-	firstCompletion, ok := tracker.completeCommand(0)
-	if !ok {
-		t.Fatal("expected first pasted command to complete")
+	output, completions := completionTracker.ingestOutput(testTerminalCommandMetadataLine(0, "python") + "\r\n")
+	if output != "" {
+		t.Fatalf("expected metadata marker to be removed from transcript, got %q", output)
 	}
-	if firstCompletion.command != "pwd" {
-		t.Fatalf("expected first command %q, got %q", "pwd", firstCompletion.command)
+	if len(completions) != 1 {
+		t.Fatalf("expected one command completion from prompt metadata, got %d", len(completions))
 	}
-
-	secondCompletion, ok := tracker.completeCommand(0)
-	if !ok {
-		t.Fatal("expected second pasted command to complete")
+	if completions[0].command != "python" {
+		t.Fatalf("expected prompt metadata command %q, got %q", "python", completions[0].command)
 	}
-	if secondCompletion.command != "ls" {
-		t.Fatalf("expected second command %q, got %q", "ls", secondCompletion.command)
-	}
-}
-
-func TestSubmittedCommandTrackerTreatsSameFrameMultilinePasteAsSingleCommand(t *testing.T) {
-	tracker := newSubmittedCommandTracker()
-
-	input, wantCommand := pastedMultilineCommandFixture()
-	tracker.ingest(input)
-
-	completion, ok := tracker.completeCommand(0)
-	if !ok {
-		t.Fatal("expected pasted multiline command to complete once closed")
+	if completions[0].exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", completions[0].exitCode)
 	}
 
-	if completion.command != wantCommand {
-		t.Fatalf("expected combined multiline command, got %q", completion.command)
+	output, completions = completionTracker.flush()
+	if output != "" {
+		t.Fatalf("expected no buffered transcript after flush, got %q", output)
 	}
-
-	if _, ok := tracker.completeCommand(0); ok {
-		t.Fatal("expected pasted multiline command to produce only one completion")
+	if len(completions) != 0 {
+		t.Fatalf("expected no synthetic completions from prior stdin heuristics, got %#v", completions)
 	}
 }
 
-func TestSubmittedCommandTrackerWaitsForMultilineCommandClosure(t *testing.T) {
-	tracker := newSubmittedCommandTracker()
+func TestCommandCompletionTrackerDecodesMultilineCommandMetadata(t *testing.T) {
+	completionTracker := newCommandCompletionTracker()
 
-	tracker.ingest("if ($true) {\r\n")
-	if _, ok := tracker.completeCommand(0); ok {
-		t.Fatal("expected multiline command opener to stay pending")
+	command := "if ($true) {\nWrite-Output \"paste\"\n}"
+	_, completions := completionTracker.ingestOutput(testTerminalCommandMetadataLine(17, command) + "\r\n")
+	if len(completions) != 1 {
+		t.Fatalf("expected one multiline command completion, got %d", len(completions))
 	}
-
-	tracker.ingest("Write-Output \"tracker\"\r\n")
-	if _, ok := tracker.completeCommand(0); ok {
-		t.Fatal("expected multiline command body to stay pending")
+	if completions[0].command != command {
+		t.Fatalf("expected multiline command %q, got %q", command, completions[0].command)
 	}
-
-	tracker.ingest("}\r\n")
-	completion, ok := tracker.completeCommand(0)
-	if !ok {
-		t.Fatal("expected closed multiline command to complete")
-	}
-
-	if completion.command != "if ($true) {\nWrite-Output \"tracker\"\n}" {
-		t.Fatalf("expected combined multiline command, got %q", completion.command)
-	}
-	if completion.exitCode != 0 {
-		t.Fatalf("expected exit code 0, got %d", completion.exitCode)
+	if completions[0].exitCode != 17 {
+		t.Fatalf("expected exit code 17, got %d", completions[0].exitCode)
 	}
 }
 
-func TestIsCompleteTopLevelCommandAllowsPowerShellPaths(t *testing.T) {
-	for _, command := range []string{
-		`cd C:\`,
-		`Write-Output "C:\"`,
-	} {
-		if !isCompleteTopLevelCommandForShell(powershellShellDialect, command) {
-			t.Fatalf("expected PowerShell command %q to be complete", command)
-		}
+func TestCommandCompletionTrackerDropsContinuationPromptMarkersFromTranscript(t *testing.T) {
+	completionTracker := newCommandCompletionTracker()
+
+	output, completions := completionTracker.ingestOutput(engine.TerminalContinuationPromptMarker + "\r\n")
+	if output != "" {
+		t.Fatalf("expected continuation marker to be removed from transcript, got %q", output)
+	}
+	if len(completions) != 0 {
+		t.Fatalf("expected no command completion from continuation marker, got %#v", completions)
 	}
 }
 
-func pastedMultilineCommandFixture() (string, string) {
-	if runtime.GOOS == "windows" {
-		return "if ($true) {\r\nWrite-Output \"paste\"\r\n}\r\n", "if ($true) {\nWrite-Output \"paste\"\n}"
-	}
-
-	return "if true; then\nprintf 'paste\\n'\nfi\n", "if true; then\nprintf 'paste\\n'\nfi"
+func testTerminalCommandMetadataLine(exitCode int, command string) string {
+	return engine.TerminalCommandExitMarker + ":" + strconv.Itoa(exitCode) + ":" + base64.StdEncoding.EncodeToString([]byte(command))
 }
