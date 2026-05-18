@@ -20,9 +20,20 @@ GitGym is a desktop-first web sandbox for practicing Git commands against dispos
 
 If you want to run services separately:
 
-- `npm run runner:dev`
-- `npm run api:dev`
-- `npm run web:dev`
+```bash
+npm run db:migrate
+npm run runner:dev
+npm run api:dev
+npm run web:dev
+```
+
+## Terminal Notes
+
+- The browser workbench uses `xterm.js` for the live terminal surface.
+- The runner owns the real PTY-backed shell per workspace. On Windows, GitGym starts `powershell.exe` for terminal sessions.
+- On non-Windows hosts, GitGym now requires `bash` for terminal command-history metadata. It no longer silently falls back to a degraded `sh` path.
+- Command-history entries are derived from shell prompt metadata, not by guessing from raw stdin. This keeps interactive programs and multiline shell input from poisoning the browser history model.
+- Commands that terminate the shell without returning to the prompt, such as `exit`, are finalized by a narrow runner-side fallback so the last history entry is not dropped.
 
 `DEV_AUTH_BYPASS=true` only applies to loopback requests. Non-loopback requests still require a real persisted browser session cookie.
 
