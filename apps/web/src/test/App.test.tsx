@@ -391,10 +391,16 @@ describe("App", () => {
   });
 
   it("shows a logout action for authenticated users and returns to the login screen after logout", async () => {
+    let resolveLogout: (() => void) | null = null;
     const refresh = vi
       .fn()
       .mockResolvedValueOnce(activeSession)
       .mockResolvedValueOnce(null);
+    mockLogout.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveLogout = resolve;
+      }),
+    );
 
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
@@ -415,8 +421,13 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Logout" }));
 
+    expect(mockLogout).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("live-terminal")).toBeInTheDocument();
+    expect(mockTerminalDispose).not.toHaveBeenCalled();
+
+    resolveLogout?.();
+
     await waitFor(() => {
-      expect(mockLogout).toHaveBeenCalledTimes(1);
       expect(refresh).toHaveBeenCalledTimes(1);
     });
 
@@ -425,6 +436,7 @@ describe("App", () => {
         screen.getByRole("link", { name: "Continue with GitHub" }),
       ).toBeInTheDocument();
     });
+    expect(mockTerminalDispose).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Signed out")).toBeInTheDocument();
     expect(screen.queryByText("runner-42")).not.toBeInTheDocument();
   });
