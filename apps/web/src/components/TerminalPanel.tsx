@@ -1,7 +1,12 @@
+import { useEffect, useRef } from "react";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 import type { TerminalSessionState } from "../types";
 
 type TerminalPanelProps = {
   preview?: boolean;
+  sessionKey?: number | string | null;
   terminal: TerminalSessionState;
 };
 
@@ -30,13 +35,107 @@ function statusLabel(status: TerminalSessionState["status"]) {
 
 export function TerminalPanel({
   preview = false,
+  sessionKey = null,
   terminal,
 }: TerminalPanelProps) {
-  const lines = preview ? previewLines : terminal.transcript;
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const lastWrittenIndexRef = useRef(0);
+  const sendInputRef = useRef(terminal.sendInput);
+  const resizeHandlerRef = useRef(terminal.resize);
+
+  useEffect(() => {
+    sendInputRef.current = terminal.sendInput;
+    resizeHandlerRef.current = terminal.resize;
+  }, [terminal.resize, terminal.sendInput]);
+
+  useEffect(() => {
+    lastWrittenIndexRef.current = 0;
+  }, [preview, sessionKey]);
+
+  useEffect(() => {
+    if (preview) {
+      return;
+    }
+
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const terminalInstance = new Terminal({
+      convertEol: true,
+      cursorBlink: true,
+      fontFamily: '"Consolas", "SFMono-Regular", "Liberation Mono", monospace',
+      fontSize: 13,
+      theme: {
+        background: "#050e19",
+        foreground: "#bbffd6",
+        cursor: "#79ffb1",
+      },
+    });
+    const fitAddon = new FitAddon();
+
+    terminalRef.current = terminalInstance;
+    terminalInstance.loadAddon(fitAddon);
+    terminalInstance.open(container);
+    terminalInstance.focus();
+
+    const dataSubscription = terminalInstance.onData((data) => {
+      sendInputRef.current(data);
+    });
+    const resizeSubscription = terminalInstance.onResize(({ cols, rows }) => {
+      resizeHandlerRef.current(cols, rows);
+    });
+
+    fitAddon.fit();
+
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            fitAddon.fit();
+            resizeHandlerRef.current(terminalInstance.cols, terminalInstance.rows);
+          });
+
+    resizeObserver?.observe(container);
+
+    return () => {
+      resizeObserver?.disconnect();
+      dataSubscription.dispose();
+      resizeSubscription.dispose();
+      lastWrittenIndexRef.current = 0;
+      if (terminalRef.current === terminalInstance) {
+        terminalRef.current = null;
+      }
+      terminalInstance.dispose();
+    };
+  }, [preview, sessionKey]);
+
+  useEffect(() => {
+    if (preview) {
+      return;
+    }
+
+    const terminalInstance = terminalRef.current;
+    if (!terminalInstance) {
+      return;
+    }
+
+    if (terminal.transcript.length < lastWrittenIndexRef.current) {
+      (terminalInstance as Terminal & { reset?: () => void }).reset?.();
+      lastWrittenIndexRef.current = 0;
+    }
+
+    const nextChunks = terminal.transcript.slice(lastWrittenIndexRef.current);
+    for (const chunk of nextChunks) {
+      terminalInstance.write(chunk);
+    }
+    lastWrittenIndexRef.current = terminal.transcript.length;
+  }, [preview, terminal.transcript]);
+
   const showReconnect =
-    !preview &&
-    terminal.terminalUrl &&
-    (terminal.status === "unavailable" || terminal.status === "error");
+    !preview && terminal.terminalUrl && terminal.status === "unavailable";
   const emptyMessage = terminal.error
     ? terminal.error
     : terminal.status === "connecting"
@@ -52,15 +151,22 @@ export function TerminalPanel({
         </span>
       </div>
       <div className="terminal-window" data-terminal-status={terminal.status}>
-        {lines.length > 0 ? (
-          lines.map((line, index) => (
+        {preview ? (
+          previewLines.map((line, index) => (
             <div key={`${index}-${line}`} className="terminal-line">
               {line}
             </div>
           ))
         ) : (
-          <p className="terminal-empty">{preview ? previewLines[0] : emptyMessage}</p>
+          <div
+            data-testid="live-terminal"
+            ref={containerRef}
+            style={{ minHeight: "100%", width: "100%" }}
+          />
         )}
+        {!preview && terminal.transcript.length === 0 ? (
+          <p className="terminal-empty">{emptyMessage}</p>
+        ) : null}
       </div>
       {!preview && terminal.terminalUrl ? (
         <div className="panel-footnote">

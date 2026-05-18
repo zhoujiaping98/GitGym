@@ -110,7 +110,7 @@ describe("useTerminalSession", () => {
     });
   });
 
-  it("exposes writable terminal state when the websocket is ready", async () => {
+  it("exposes writable terminal state once the websocket transport opens", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
 
     const { result } = renderHook(() => useTerminalSession(activeSession));
@@ -123,15 +123,18 @@ describe("useTerminalSession", () => {
       MockWebSocket.instances[0].emit("open");
     });
 
-    expect(result.current.status).toBe("connecting");
+    expect(result.current.status).toBe("ready");
     expect(MockWebSocket.instances[0].readyState).toBe(MockWebSocket.OPEN);
 
     act(() => {
-      result.current.sendInput("pwd\n");
-      result.current.resize(80, 24);
+      result.current.sendInput("git status\n");
+      result.current.resize(120, 40);
     });
 
-    expect(MockWebSocket.instances[0].sent).toEqual([]);
+    expect(MockWebSocket.instances[0].sent).toEqual([
+      JSON.stringify({ type: "input", data: "git status\n" }),
+      JSON.stringify({ type: "resize", cols: 120, rows: 40 }),
+    ]);
 
     act(() => {
       MockWebSocket.instances[0].emit("message", {
@@ -144,13 +147,15 @@ describe("useTerminalSession", () => {
     });
 
     act(() => {
-      result.current.sendInput("git status\n");
-      result.current.resize(120, 40);
+      result.current.sendInput("pwd\n");
+      result.current.resize(80, 24);
     });
 
     expect(MockWebSocket.instances[0].sent).toEqual([
       JSON.stringify({ type: "input", data: "git status\n" }),
       JSON.stringify({ type: "resize", cols: 120, rows: 40 }),
+      JSON.stringify({ type: "input", data: "pwd\n" }),
+      JSON.stringify({ type: "resize", cols: 80, rows: 24 }),
     ]);
   });
 

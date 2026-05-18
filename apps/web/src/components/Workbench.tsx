@@ -31,7 +31,12 @@ export function Workbench({
 
   return (
     <section className={shellClassName}>
-      <TerminalPanel preview={preview} terminal={terminal} />
+      <TerminalPanel
+        key={preview ? "preview-terminal" : session?.id ?? "live-terminal"}
+        preview={preview}
+        sessionKey={preview ? "preview-terminal" : session?.id ?? null}
+        terminal={terminal}
+      />
       <RepoPanel preview={preview} session={session} />
       <CommandHistoryPanel preview={preview} terminal={terminal} />
     </section>

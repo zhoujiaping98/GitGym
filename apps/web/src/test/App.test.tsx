@@ -2,12 +2,29 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import * as api from "../lib/api";
+import type { TerminalSessionState } from "../types";
 
 const mockUseCurrentSession = vi.fn();
 const mockUseTerminalSession = vi.fn();
 const mockCreatePracticeSession = vi.spyOn(api, "createPracticeSession");
 const mockResetPracticeSession = vi.spyOn(api, "resetPracticeSession");
 const mockLogout = vi.spyOn(api, "logout");
+const mockFitAddonFit = vi.fn();
+const mockTerminalDispose = vi.fn();
+const mockTerminalFocus = vi.fn();
+const mockTerminalLoadAddon = vi.fn();
+const mockTerminalOpen = vi.fn();
+const mockTerminalReset = vi.fn();
+const mockTerminalResize = vi.fn();
+const mockTerminalWrite = vi.fn();
+const mockTerminalOnData = vi.fn();
+const mockTerminalOnResize = vi.fn();
+const mockTerminalInstances: Array<{ options?: unknown }> = [];
+
+let currentTerminalDataHandler: ((data: string) => void) | null = null;
+let currentTerminalResizeHandler:
+  | ((payload: { cols: number; rows: number }) => void)
+  | null = null;
 
 vi.mock("../hooks/useCurrentSession", () => ({
   useCurrentSession: () => mockUseCurrentSession(),
@@ -15,6 +32,51 @@ vi.mock("../hooks/useCurrentSession", () => ({
 
 vi.mock("../hooks/useTerminalSession", () => ({
   useTerminalSession: (session: unknown) => mockUseTerminalSession(session),
+}));
+
+vi.mock("@xterm/addon-fit", () => ({
+  FitAddon: class MockFitAddon {
+    fit = mockFitAddonFit;
+  },
+}));
+
+vi.mock("@xterm/xterm", () => ({
+  Terminal: class MockTerminal {
+    cols = 80;
+    rows = 24;
+
+    constructor(options?: unknown) {
+      mockTerminalInstances.push({ options });
+    }
+
+    dispose = mockTerminalDispose;
+    focus = mockTerminalFocus;
+    loadAddon = mockTerminalLoadAddon;
+    open = mockTerminalOpen;
+    reset = mockTerminalReset;
+    resize = (cols: number, rows: number) => {
+      this.cols = cols;
+      this.rows = rows;
+      mockTerminalResize(cols, rows);
+    };
+    write = mockTerminalWrite;
+
+    onData = (handler: (data: string) => void) => {
+      currentTerminalDataHandler = handler;
+      mockTerminalOnData(handler);
+      return {
+        dispose: vi.fn(),
+      };
+    };
+
+    onResize = (handler: (payload: { cols: number; rows: number }) => void) => {
+      currentTerminalResizeHandler = handler;
+      mockTerminalOnResize(handler);
+      return {
+        dispose: vi.fn(),
+      };
+    };
+  },
 }));
 
 const activeSession = {
@@ -56,9 +118,46 @@ const mismatchedSession = {
   lastActivityAt: "2026-05-16T10:20:00.000Z",
 } as const;
 
+function createTerminalState(
+  overrides: Partial<TerminalSessionState> = {},
+): TerminalSessionState {
+  return {
+    status: "idle",
+    transcript: [],
+    history: [],
+    terminalUrl: null,
+    error: null,
+    reconnect: vi.fn(),
+    sendInput: vi.fn(),
+    resize: vi.fn(),
+    ...overrides,
+  };
+}
+
+function emitTerminalData(data: string) {
+  currentTerminalDataHandler?.(data);
+}
+
+function emitTerminalResize(cols: number, rows: number) {
+  currentTerminalResizeHandler?.({ cols, rows });
+}
+
 beforeEach(() => {
   mockUseCurrentSession.mockReset();
   mockUseTerminalSession.mockReset();
+  mockFitAddonFit.mockReset();
+  mockTerminalDispose.mockReset();
+  mockTerminalFocus.mockReset();
+  mockTerminalLoadAddon.mockReset();
+  mockTerminalOpen.mockReset();
+  mockTerminalReset.mockReset();
+  mockTerminalResize.mockReset();
+  mockTerminalWrite.mockReset();
+  mockTerminalOnData.mockReset();
+  mockTerminalOnResize.mockReset();
+  mockTerminalInstances.length = 0;
+  currentTerminalDataHandler = null;
+  currentTerminalResizeHandler = null;
 
   mockUseCurrentSession.mockReturnValue({
     status: "ready",
@@ -68,14 +167,7 @@ beforeEach(() => {
     refresh: vi.fn().mockResolvedValue(null),
   });
 
-  mockUseTerminalSession.mockReturnValue({
-    status: "idle",
-    transcript: [],
-    history: [],
-    terminalUrl: null,
-    error: null,
-    reconnect: vi.fn(),
-  });
+  mockUseTerminalSession.mockReturnValue(createTerminalState());
 
   mockCreatePracticeSession.mockReset();
   mockCreatePracticeSession.mockResolvedValue(nextSession);
@@ -115,15 +207,6 @@ describe("App", () => {
       refresh: vi.fn().mockResolvedValue(nextSession),
     });
 
-    mockUseTerminalSession.mockReturnValue({
-      status: "idle",
-      transcript: [],
-      history: [],
-      terminalUrl: null,
-      error: null,
-      reconnect: vi.fn(),
-    });
-
     render(<App />);
 
     expect(screen.getByText("Signed in")).toBeInTheDocument();
@@ -161,7 +244,9 @@ describe("App", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Create your first practice session" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "Create your first practice session" }),
+      ).toBeInTheDocument();
     });
 
     expect(screen.getByText("create failed")).toBeInTheDocument();
@@ -204,7 +289,9 @@ describe("App", () => {
     expect(
       screen.getByRole("heading", { name: "Session unavailable" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("We could not restore your current practice session.")).toBeInTheDocument();
+    expect(
+      screen.getByText("We could not restore your current practice session."),
+    ).toBeInTheDocument();
     expect(screen.getByText("api offline")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
     expect(
@@ -224,26 +311,27 @@ describe("App", () => {
       refresh,
     });
 
-    mockUseTerminalSession.mockReturnValue({
-      status: "ready",
-      transcript: [
-        "$ git status",
-        "On branch main",
-        "nothing to commit, working tree clean",
-      ],
-      history: [
-        {
-          id: "cmd-1",
-          command: "git status",
-          executedAt: "2026-05-16T10:04:00.000Z",
-          exitCode: 0,
-          summary: "working tree clean",
-        },
-      ],
-      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
-      error: null,
-      reconnect,
-    });
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        transcript: [
+          "$ git status",
+          "On branch main",
+          "nothing to commit, working tree clean",
+        ],
+        history: [
+          {
+            id: "cmd-1",
+            command: "git status",
+            executedAt: "2026-05-16T10:04:00.000Z",
+            exitCode: 0,
+            summary: "working tree clean",
+          },
+        ],
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        reconnect,
+      }),
+    );
 
     render(<App />);
 
@@ -295,14 +383,12 @@ describe("App", () => {
       refresh,
     });
 
-    mockUseTerminalSession.mockReturnValue({
-      status: "ready",
-      transcript: [],
-      history: [],
-      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
-      error: null,
-      reconnect: vi.fn(),
-    });
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
 
     render(<App />);
 
@@ -333,14 +419,14 @@ describe("App", () => {
       refresh: vi.fn().mockResolvedValue(activeSession),
     });
 
-    mockUseTerminalSession.mockReturnValue({
-      status: "unavailable",
-      transcript: [],
-      history: [],
-      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
-      error: "Terminal transport is unavailable for this session.",
-      reconnect,
-    });
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "unavailable",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        error: "Terminal transport is unavailable for this session.",
+        reconnect,
+      }),
+    );
 
     render(<App />);
 
@@ -361,14 +447,12 @@ describe("App", () => {
       refresh,
     });
 
-    mockUseTerminalSession.mockReturnValue({
-      status: "ready",
-      transcript: [],
-      history: [],
-      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
-      error: null,
-      reconnect: vi.fn(),
-    });
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
 
     render(<App />);
 
@@ -384,7 +468,9 @@ describe("App", () => {
     });
 
     expect(screen.queryByText("runner-43")).not.toBeInTheDocument();
-    expect(screen.getByText("Created a new session, but refreshing it failed: api offline")).toBeInTheDocument();
+    expect(
+      screen.getByText("Created a new session, but refreshing it failed: api offline"),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry sync" })).toBeInTheDocument();
   });
 
@@ -399,14 +485,12 @@ describe("App", () => {
       refresh,
     });
 
-    mockUseTerminalSession.mockReturnValue({
-      status: "ready",
-      transcript: [],
-      history: [],
-      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
-      error: null,
-      reconnect: vi.fn(),
-    });
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
 
     render(<App />);
 
@@ -434,14 +518,12 @@ describe("App", () => {
       refresh: vi.fn().mockResolvedValue(activeSession),
     });
 
-    mockUseTerminalSession.mockReturnValue({
-      status: "ready",
-      transcript: [],
-      history: [],
-      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
-      error: null,
-      reconnect: vi.fn(),
-    });
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
 
     render(<App />);
 
@@ -465,14 +547,12 @@ describe("App", () => {
       refresh,
     });
 
-    mockUseTerminalSession.mockReturnValue({
-      status: "ready",
-      transcript: [],
-      history: [],
-      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
-      error: null,
-      reconnect: vi.fn(),
-    });
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
 
     render(<App />);
 
@@ -486,5 +566,139 @@ describe("App", () => {
     expect(
       screen.getByText("Reset completed, but the server did not return a current session."),
     ).toBeInTheDocument();
+  });
+
+  it("creates an xterm session and streams output into it", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        transcript: ["$ git status\r\n", "On branch main\r\n"],
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(mockTerminalInstances).toHaveLength(1);
+      expect(mockTerminalOpen).toHaveBeenCalledTimes(1);
+    });
+
+    await waitFor(() => {
+      expect(mockTerminalWrite).toHaveBeenCalledWith("$ git status\r\n");
+      expect(mockTerminalWrite).toHaveBeenCalledWith("On branch main\r\n");
+    });
+  });
+
+  it("sends terminal keystrokes over the websocket", async () => {
+    const sendInput = vi.fn();
+    const resize = vi.fn();
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        sendInput,
+        resize,
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(mockTerminalOnData).toHaveBeenCalledTimes(1);
+      expect(mockTerminalOnResize).toHaveBeenCalledTimes(1);
+    });
+
+    emitTerminalData("git status\r");
+    emitTerminalResize(120, 40);
+
+    expect(sendInput).toHaveBeenCalledWith("git status\r");
+    expect(resize).toHaveBeenCalledWith(120, 40);
+  });
+
+  it("shows reconnect only when the live terminal transport is unavailable", () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const { rerender } = render(<App />);
+
+    expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+    rerender(<App />);
+    expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "unavailable",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        error: "Terminal transport is unavailable for this session.",
+      }),
+    );
+    rerender(<App />);
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeInTheDocument();
+  });
+
+  it("keeps the terminal mounted while a session is active", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession
+      .mockReturnValueOnce(
+        createTerminalState({
+          status: "connecting",
+          terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        }),
+      )
+      .mockReturnValueOnce(
+        createTerminalState({
+          status: "ready",
+          transcript: ["$ pwd\r\n"],
+          terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        }),
+      );
+
+    const { rerender } = render(<App />);
+
+    const firstMount = await screen.findByTestId("live-terminal");
+
+    rerender(<App />);
+
+    const secondMount = await screen.findByTestId("live-terminal");
+
+    expect(firstMount).toBe(secondMount);
+    expect(mockTerminalInstances).toHaveLength(1);
   });
 });

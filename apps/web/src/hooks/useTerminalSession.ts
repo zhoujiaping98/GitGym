@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import type { TerminalClientMessage } from "../lib/terminal-protocol";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  TerminalClientMessage,
+  TerminalServerMessage,
+} from "../lib/terminal-protocol";
 import { buildTerminalWebSocketUrl } from "../lib/ws";
 import type {
   CommandHistoryEntry,
@@ -9,8 +12,24 @@ import type {
 
 const unavailableSummary = "Terminal transport is unavailable for this session.";
 
-function sendTerminalMessage(message: TerminalClientMessage, socket: WebSocket | null) {
-  socket?.send(JSON.stringify(message));
+function sendTerminalMessage(
+  message: TerminalClientMessage,
+  socket: WebSocket | null,
+  protocolReady: boolean,
+) {
+  if (!protocolReady || !socket || socket.readyState !== 1) {
+    return;
+  }
+
+  socket.send(JSON.stringify(message));
+}
+
+function parseTerminalFrame(payload: string): TerminalServerMessage | null {
+  try {
+    return JSON.parse(payload) as TerminalServerMessage;
+  } catch {
+    return null;
+  }
 }
 
 export function useTerminalSession(
@@ -79,6 +98,10 @@ export function useTerminalSession(
       if (reconnectTokenRef.current !== currentReconnectToken) {
         return;
       }
+
+      protocolReadyRef.current = true;
+      setStatus("ready");
+      setError(null);
     });
 
     socket.addEventListener("message", (event) => {
@@ -86,8 +109,36 @@ export function useTerminalSession(
         return;
       }
 
-      const nextLine = typeof event.data === "string" ? event.data : "[binary]";
-      setTranscript((lines) => [...lines, nextLine]);
+      if (typeof event.data !== "string") {
+        setTranscript((lines) => [...lines, "[binary]"]);
+        return;
+      }
+
+      const frame = parseTerminalFrame(event.data);
+      if (!frame) {
+        setTranscript((lines) => [...lines, event.data]);
+        return;
+      }
+
+      switch (frame.type) {
+        case "ready":
+          protocolReadyRef.current = true;
+          setStatus("ready");
+          setError(null);
+          return;
+        case "output":
+          setTranscript((lines) => [...lines, frame.data]);
+          return;
+        case "error":
+          setStatus("error");
+          setError(frame.message);
+          return;
+        case "status":
+        case "exit":
+          return;
+        default:
+          return;
+      }
     });
 
     socket.addEventListener("error", () => {
@@ -122,28 +173,34 @@ export function useTerminalSession(
     };
   }, [reconnectCount, sessionId]);
 
+  const reconnect = useCallback(() => {
+    setReconnectCount((count) => count + 1);
+  }, []);
+
+  const sendInput = useCallback((data: string) => {
+    sendTerminalMessage(
+      { type: "input", data },
+      socketRef.current,
+      protocolReadyRef.current,
+    );
+  }, []);
+
+  const resize = useCallback((cols: number, rows: number) => {
+    sendTerminalMessage(
+      { type: "resize", cols, rows },
+      socketRef.current,
+      protocolReadyRef.current,
+    );
+  }, []);
+
   return {
     status,
     transcript,
     history,
     terminalUrl,
     error,
-    reconnect: () => {
-      setReconnectCount((count) => count + 1);
-    },
-    sendInput: (data) => {
-      if (!protocolReadyRef.current || socketRef.current?.readyState !== 1) {
-        return;
-      }
-
-      sendTerminalMessage({ type: "input", data }, socketRef.current);
-    },
-    resize: (cols, rows) => {
-      if (!protocolReadyRef.current || socketRef.current?.readyState !== 1) {
-        return;
-      }
-
-      sendTerminalMessage({ type: "resize", cols, rows }, socketRef.current);
-    },
+    reconnect,
+    sendInput,
+    resize,
   };
 }
