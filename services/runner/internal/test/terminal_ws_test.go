@@ -150,6 +150,39 @@ func TestTerminalWebSocketClosesWhenPTYSessionEnds(t *testing.T) {
 	}
 }
 
+func TestTerminalWebSocketEmitsCommandExitFramesBeforeSessionClose(t *testing.T) {
+	workspace := createGitWorkspace(t)
+	manager := engine.NewTerminalManager()
+	conn := dialTerminalWebSocket(t, workspace.ID, filepath.Dir(workspace.Path), manager)
+	defer closeTerminalWebSocket(t, conn)
+	t.Cleanup(func() {
+		releaseManagedTerminalSocketSession(t, manager, workspace)
+	})
+
+	assertTerminalReadyFrame(t, conn)
+
+	firstCommand := shellPrintLine(terminalMarker("ws-exit-one"), "__GITGYM_EXIT_ONE__")
+	secondCommand := shellPrintLine(terminalMarker("ws-exit-two"), "__GITGYM_EXIT_TWO__")
+
+	if err := wsjson.Write(context.Background(), conn, engine.TerminalClientMessage{
+		Type: "input",
+		Data: firstCommand,
+	}); err != nil {
+		t.Fatalf("write first terminal command: %v", err)
+	}
+
+	assertTerminalCommandCompletion(t, conn, strings.TrimSpace(firstCommand), 0)
+
+	if err := wsjson.Write(context.Background(), conn, engine.TerminalClientMessage{
+		Type: "input",
+		Data: secondCommand,
+	}); err != nil {
+		t.Fatalf("write second terminal command: %v", err)
+	}
+
+	assertTerminalCommandCompletion(t, conn, strings.TrimSpace(secondCommand), 0)
+}
+
 func dialTerminalWebSocket(t *testing.T, workspaceID string, workRoot string, manager *engine.TerminalManager) *websocket.Conn {
 	t.Helper()
 
@@ -286,5 +319,43 @@ func readTerminalWebSocketCloseStatus(t *testing.T, conn *websocket.Conn) websoc
 		}
 
 		t.Fatalf("read terminal websocket close frame: %v", err)
+	}
+}
+
+func assertTerminalCommandCompletion(t *testing.T, conn *websocket.Conn, wantCommand string, wantExitCode int) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	statusSeen := false
+	exitSeen := false
+	frames := make([]string, 0, 8)
+
+	for !statusSeen || !exitSeen {
+		var message engine.TerminalServerMessage
+		if err := wsjson.Read(ctx, conn, &message); err != nil {
+			t.Fatalf("read command completion frame: %v (statusSeen=%t exitSeen=%t frames=%v)", err, statusSeen, exitSeen, frames)
+		}
+		frames = append(frames, fmt.Sprintf("%s:%q:%q:%q:%v", message.Type, message.Phase, message.Detail, message.Data, message.ExitCode))
+
+		switch message.Type {
+		case "status":
+			if message.Phase != "running" {
+				continue
+			}
+			if message.Detail != wantCommand {
+				t.Fatalf("expected status detail %q, got %q", wantCommand, message.Detail)
+			}
+			statusSeen = true
+		case "exit":
+			if message.ExitCode == nil {
+				t.Fatal("expected exit frame to include exitCode")
+			}
+			if *message.ExitCode != wantExitCode {
+				t.Fatalf("expected exitCode %d, got %d", wantExitCode, *message.ExitCode)
+			}
+			exitSeen = true
+		}
 	}
 }

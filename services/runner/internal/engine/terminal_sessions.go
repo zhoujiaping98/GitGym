@@ -362,6 +362,7 @@ func startUnixShell(ctx context.Context, session *TerminalSession) error {
 	cmd := exec.Command(command, args...)
 	cmd.Dir = session.WorkspacePath
 	configureTerminalCommand(cmd)
+	cmd.Env = append(os.Environ(), terminalShellEnvironment()...)
 
 	ptmx, err := unixpty.Start(cmd)
 	if err != nil {
@@ -435,11 +436,29 @@ func shellCommand() (string, []string, error) {
 			"-NoProfile",
 			"-NoExit",
 			"-Command",
-			"$ErrorActionPreference='SilentlyContinue'; Import-Module PSReadLine -ErrorAction SilentlyContinue; Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction SilentlyContinue",
+			fmt.Sprintf(
+				"$ErrorActionPreference='SilentlyContinue'; function global:prompt { $gitgymSuccess = $?; $gitgymExit = if ($gitgymSuccess) { 0 } elseif ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -is [int]) { [int]$global:LASTEXITCODE } else { 1 }; [Console]::Out.WriteLine('%s:' + $gitgymExit); 'PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }; Import-Module PSReadLine -ErrorAction SilentlyContinue; Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction SilentlyContinue",
+				TerminalCommandExitMarker,
+			),
 		}, nil
 	}
 
-	return "sh", []string{"-l"}, nil
+	if command, err := exec.LookPath("bash"); err == nil {
+		return command, []string{"--noprofile", "--norc", "-i"}, nil
+	}
+
+	return "sh", []string{"-i"}, nil
+}
+
+func terminalShellEnvironment() []string {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+
+	prompt := fmt.Sprintf("$(printf '%s:%%s\\n' \"$?\")$ ", TerminalCommandExitMarker)
+	return []string{
+		"PS1=" + prompt,
+	}
 }
 
 func (s *TerminalSession) pump(reader io.ReadCloser) {

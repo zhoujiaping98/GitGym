@@ -130,6 +130,83 @@ func TestPracticeTerminalWebSocketBridgesRunnerOutput(t *testing.T) {
 	}
 }
 
+func TestPracticeTerminalWebSocketBridgesRunnerCommandCompletionFrames(t *testing.T) {
+	t.Parallel()
+
+	runnerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/workspaces/ws-completion/terminal" {
+			http.NotFound(w, r)
+			return
+		}
+
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+
+		for _, payload := range []string{
+			`{"type":"status","phase":"running","detail":"git status"}`,
+			`{"type":"exit","exitCode":0}`,
+		} {
+			if err := conn.Write(r.Context(), websocket.MessageText, []byte(payload)); err != nil {
+				t.Errorf("write runner completion frame %q: %v", payload, err)
+				return
+			}
+		}
+	}))
+	defer runnerServer.Close()
+
+	practiceService := service.NewPracticeService(
+		service.NewInMemoryPracticeSessionStore(),
+		&stubRunnerClient{
+			workspace: runner.Workspace{
+				ID:       "ws-completion",
+				Path:     "/tmp/ws-completion",
+				Template: "standard",
+			},
+		},
+		func() time.Time {
+			return time.Date(2026, 5, 17, 8, 7, 0, 0, time.UTC)
+		},
+	)
+
+	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 7,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	apiServer := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
+		PracticeService: practiceService,
+		AuthStore:       authStoreWithSession("runner-completion-token", 42),
+		RunnerClient:    runner.NewClient(runnerServer.URL, http.DefaultClient),
+	}))
+	defer apiServer.Close()
+
+	conn := dialPracticeTerminal(t, apiServer.URL, session.ID, "runner-completion-token")
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	ctx, cancel := testTimeoutContext(t)
+	defer cancel()
+
+	for _, want := range []string{
+		`{"type":"status","phase":"running","detail":"git status"}`,
+		`{"type":"exit","exitCode":0}`,
+	} {
+		_, payload, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("read bridged runner completion frame %q: %v", want, err)
+		}
+		if string(payload) != want {
+			t.Fatalf("expected bridged payload %q, got %q", want, string(payload))
+		}
+	}
+}
+
 func TestPracticeTerminalWebSocketForwardsBrowserInput(t *testing.T) {
 	t.Parallel()
 

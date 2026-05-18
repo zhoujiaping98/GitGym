@@ -1,5 +1,7 @@
 package engine
 
+const TerminalCommandExitMarker = "__GITGYM_COMMAND_EXIT__"
+
 type TerminalClientMessage struct {
 	Type string `json:"type"`
 	Data string `json:"data,omitempty"`
