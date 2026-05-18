@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -67,6 +68,7 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 
 		streamDone := make(chan error, 1)
 		completionTracker := newCommandCompletionTracker()
+		exitSubmissionTracker := newShellExitSubmissionTracker()
 		go func() {
 			streamErr := session.ReadLoop(ctx, func(chunk []byte) error {
 				output, completions := completionTracker.ingestOutput(string(chunk))
@@ -97,7 +99,17 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 			})
 			switch {
 			case streamErr == nil:
+				waitErr := session.Wait()
+				exitCode, haveExitCode := terminalExitCode(waitErr)
 				output, completions := completionTracker.flush()
+				if haveExitCode {
+					if command, ok := exitSubmissionTracker.consume(); ok && !hasCommandCompletion(completions, command) {
+						completions = append(completions, commandCompletion{
+							command:  command,
+							exitCode: exitCode,
+						})
+					}
+				}
 				if output != "" {
 					_ = writeFrame(engine.TerminalServerMessage{
 						Type: "output",
@@ -115,7 +127,6 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 						ExitCode: &completion.exitCode,
 					})
 				}
-				_, _ = terminalExitCode(session.Wait())
 				closeConn(websocket.StatusNormalClosure, "")
 			case !errors.Is(streamErr, context.Canceled):
 				closeConn(websocket.StatusInternalError, "terminal stream failed")
@@ -135,6 +146,11 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 
 			switch message.Type {
 			case "input":
+				if command, ok := parseShellExitInput(message.Data); ok {
+					exitSubmissionTracker.note(command)
+				} else {
+					exitSubmissionTracker.clear()
+				}
 				if err := session.WriteInput(message.Data); err != nil {
 					closeConn(websocket.StatusInternalError, "terminal unavailable")
 					return
@@ -155,6 +171,11 @@ func terminalExitCode(err error) (int, bool) {
 		return 0, true
 	}
 
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), true
+	}
+
 	var closeErr websocket.CloseError
 	if errors.As(err, &closeErr) {
 		return 0, false
@@ -166,6 +187,7 @@ func terminalExitCode(err error) (int, bool) {
 var terminalContinuationPromptLine = regexp.MustCompile("^" + regexp.QuoteMeta(engine.TerminalContinuationPromptMarker) + "\\r?$")
 var terminalANSISequence = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 var terminalCommandMetadataLine = regexp.MustCompile("^" + regexp.QuoteMeta(engine.TerminalCommandExitMarker) + ":(-?\\d+):([A-Za-z0-9+/=]+)\\r?$")
+var shellExitCommandPattern = regexp.MustCompile(`(?i)^(?:exit(?:\s+\d+)?|logout)$`)
 
 type commandCompletionTracker struct {
 	mu            sync.Mutex
@@ -273,4 +295,74 @@ func couldBeExitMarkerFragment(value string) bool {
 	}
 
 	return strings.HasPrefix(engine.TerminalCommandExitMarker, value)
+}
+
+func parseShellExitInput(data string) (string, bool) {
+	normalized := strings.ReplaceAll(data, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+
+	lines := make([]string, 0, 1)
+	for _, line := range strings.Split(normalized, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		lines = append(lines, trimmed)
+	}
+
+	if len(lines) != 1 {
+		return "", false
+	}
+
+	command := lines[0]
+	if !shellExitCommandPattern.MatchString(command) {
+		return "", false
+	}
+
+	return command, true
+}
+
+func hasCommandCompletion(completions []commandCompletion, command string) bool {
+	for _, completion := range completions {
+		if completion.command == command {
+			return true
+		}
+	}
+	return false
+}
+
+type shellExitSubmissionTracker struct {
+	mu      sync.Mutex
+	pending string
+}
+
+func newShellExitSubmissionTracker() *shellExitSubmissionTracker {
+	return &shellExitSubmissionTracker{}
+}
+
+func (t *shellExitSubmissionTracker) note(command string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.pending = command
+}
+
+func (t *shellExitSubmissionTracker) clear() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.pending = ""
+}
+
+func (t *shellExitSubmissionTracker) consume() (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.pending == "" {
+		return "", false
+	}
+
+	command := t.pending
+	t.pending = ""
+	return command, true
 }

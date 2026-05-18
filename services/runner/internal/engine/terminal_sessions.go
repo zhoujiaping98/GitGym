@@ -354,7 +354,7 @@ func startUnixShell(ctx context.Context, session *TerminalSession) error {
 		return err
 	}
 
-	command, args, err := shellCommand()
+	command, args, env, err := posixShellStartupSpec(exec.LookPath)
 	if err != nil {
 		return err
 	}
@@ -362,7 +362,7 @@ func startUnixShell(ctx context.Context, session *TerminalSession) error {
 	cmd := exec.Command(command, args...)
 	cmd.Dir = session.WorkspacePath
 	configureTerminalCommand(cmd)
-	cmd.Env = append(os.Environ(), terminalShellEnvironment()...)
+	cmd.Env = append(os.Environ(), env...)
 
 	ptmx, err := unixpty.Start(cmd)
 	if err != nil {
@@ -440,24 +440,24 @@ func shellCommand() (string, []string, error) {
 		}, nil
 	}
 
-	if command, err := exec.LookPath("bash"); err == nil {
-		return command, []string{"--noprofile", "--norc", "-i"}, nil
+	command, args, _, err := posixShellStartupSpec(exec.LookPath)
+	if err != nil {
+		return "", nil, err
 	}
-
-	return "sh", []string{"-i"}, nil
+	return command, args, nil
 }
 
-func terminalShellEnvironment() []string {
-	if runtime.GOOS == "windows" {
-		return nil
+func posixShellStartupSpec(lookPath func(string) (string, error)) (string, []string, []string, error) {
+	command, err := lookPath("bash")
+	if err != nil {
+		return "", nil, nil, errors.New("interactive terminal requires bash on non-windows hosts")
 	}
-
-	return []string{
+	return command, []string{"--noprofile", "--norc", "-i"}, []string{
 		"PS1=$ ",
 		"HISTFILE=/dev/null",
 		"HISTCONTROL=",
 		"PROMPT_COMMAND=" + posixPromptCommandBootstrap(),
-	}
+	}, nil
 }
 
 func powershellPromptBootstrap() string {
