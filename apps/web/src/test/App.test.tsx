@@ -20,11 +20,14 @@ const mockTerminalWrite = vi.fn();
 const mockTerminalOnData = vi.fn();
 const mockTerminalOnResize = vi.fn();
 const mockTerminalInstances: Array<{ options?: unknown }> = [];
+const mockResizeObserverObserve = vi.fn();
+const mockResizeObserverDisconnect = vi.fn();
 
 let currentTerminalDataHandler: ((data: string) => void) | null = null;
 let currentTerminalResizeHandler:
   | ((payload: { cols: number; rows: number }) => void)
   | null = null;
+let currentResizeObserverCallback: (() => void) | null = null;
 
 vi.mock("../hooks/useCurrentSession", () => ({
   useCurrentSession: () => mockUseCurrentSession(),
@@ -142,6 +145,10 @@ function emitTerminalResize(cols: number, rows: number) {
   currentTerminalResizeHandler?.({ cols, rows });
 }
 
+function triggerTerminalContainerResize() {
+  currentResizeObserverCallback?.();
+}
+
 beforeEach(() => {
   mockUseCurrentSession.mockReset();
   mockUseTerminalSession.mockReset();
@@ -155,9 +162,23 @@ beforeEach(() => {
   mockTerminalWrite.mockReset();
   mockTerminalOnData.mockReset();
   mockTerminalOnResize.mockReset();
+  mockResizeObserverObserve.mockReset();
+  mockResizeObserverDisconnect.mockReset();
   mockTerminalInstances.length = 0;
   currentTerminalDataHandler = null;
   currentTerminalResizeHandler = null;
+  currentResizeObserverCallback = null;
+
+  class MockResizeObserver {
+    constructor(callback: () => void) {
+      currentResizeObserverCallback = callback;
+    }
+
+    observe = mockResizeObserverObserve;
+    disconnect = mockResizeObserverDisconnect;
+  }
+
+  vi.stubGlobal("ResizeObserver", MockResizeObserver);
 
   mockUseCurrentSession.mockReturnValue({
     status: "ready",
@@ -630,6 +651,44 @@ describe("App", () => {
     emitTerminalResize(120, 40);
 
     expect(sendInput).toHaveBeenCalledWith("git status\r");
+    expect(resize).toHaveBeenCalledWith(120, 40);
+  });
+
+  it("fits on container resize without sending duplicate resize frames", async () => {
+    const resize = vi.fn();
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        resize,
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(mockResizeObserverObserve).toHaveBeenCalledTimes(1);
+    });
+
+    const initialFitCalls = mockFitAddonFit.mock.calls.length;
+
+    triggerTerminalContainerResize();
+
+    expect(mockFitAddonFit).toHaveBeenCalledTimes(initialFitCalls + 1);
+    expect(resize).not.toHaveBeenCalled();
+
+    emitTerminalResize(120, 40);
+
+    expect(resize).toHaveBeenCalledTimes(1);
     expect(resize).toHaveBeenCalledWith(120, 40);
   });
 

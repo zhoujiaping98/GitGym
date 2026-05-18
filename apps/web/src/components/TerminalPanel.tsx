@@ -95,7 +95,6 @@ export function TerminalPanel({
         ? null
         : new ResizeObserver(() => {
             fitAddon.fit();
-            resizeHandlerRef.current(terminalInstance.cols, terminalInstance.rows);
           });
 
     resizeObserver?.observe(container);
