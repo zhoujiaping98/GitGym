@@ -243,6 +243,60 @@ describe("useTerminalSession", () => {
     });
   });
 
+  it("finalizes command history entries in FIFO order when multiple commands are pending", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() => useTerminalSession(activeSession));
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+
+    act(() => {
+      MockWebSocket.instances[0].emit("open");
+      MockWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({ type: "ready", cols: 120, rows: 40 }),
+      } as MessageEvent);
+      MockWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({
+          type: "status",
+          phase: "running",
+          detail: "pwd",
+        }),
+      } as MessageEvent);
+      MockWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({
+          type: "status",
+          phase: "running",
+          detail: "ls",
+        }),
+      } as MessageEvent);
+      MockWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({ type: "exit", exitCode: 0 }),
+      } as MessageEvent);
+      MockWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({ type: "exit", exitCode: 1 }),
+      } as MessageEvent);
+    });
+
+    await waitFor(() => {
+      expect(result.current.history).toHaveLength(2);
+    });
+
+    expect(result.current.history).toMatchObject([
+      {
+        command: "pwd",
+        exitCode: 0,
+        phase: "stopped",
+      },
+      {
+        command: "ls",
+        exitCode: 1,
+        phase: "stopped",
+      },
+    ]);
+  });
+
   it("preserves terminal state when the session object changes but the id stays the same", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
 

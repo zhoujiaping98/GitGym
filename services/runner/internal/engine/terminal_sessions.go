@@ -437,7 +437,8 @@ func shellCommand() (string, []string, error) {
 			"-NoExit",
 			"-Command",
 			fmt.Sprintf(
-				"$ErrorActionPreference='SilentlyContinue'; function global:prompt { $gitgymSuccess = $?; $gitgymExit = if ($gitgymSuccess) { 0 } elseif ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -is [int]) { [int]$global:LASTEXITCODE } else { 1 }; [Console]::Out.WriteLine('%s:' + $gitgymExit); 'PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }; Import-Module PSReadLine -ErrorAction SilentlyContinue; Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction SilentlyContinue",
+				"$ErrorActionPreference='SilentlyContinue'; $global:GitGymOriginalPrompt = $function:prompt; function global:prompt { $gitgymSuccess = $?; $gitgymExit = if ($gitgymSuccess) { 0 } elseif ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -is [int]) { [int]$global:LASTEXITCODE } else { 1 }; $gitgymPrompt = if ($global:GitGymOriginalPrompt) { & $global:GitGymOriginalPrompt } else { 'PS ' + $executionContext.SessionState.Path.CurrentLocation + '> ' }; if ($gitgymPrompt -match '^\\s*>>') { [Console]::Out.WriteLine('%s') } else { [Console]::Out.WriteLine('%s:' + $gitgymExit) }; $gitgymPrompt }; Import-Module PSReadLine -ErrorAction SilentlyContinue; Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction SilentlyContinue",
+				TerminalContinuationPromptMarker,
 				TerminalCommandExitMarker,
 			),
 		}, nil

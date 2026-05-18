@@ -66,10 +66,11 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 		}
 
 		streamDone := make(chan error, 1)
-		completionTracker := newCommandCompletionTracker()
+		commandTracker := newSubmittedCommandTracker()
+		completionTracker := newCommandCompletionTracker(commandTracker)
 		go func() {
 			streamErr := session.ReadLoop(ctx, func(chunk []byte) error {
-				output, exitCodes := completionTracker.ingestOutput(string(chunk))
+				output, completions := completionTracker.ingestOutput(string(chunk))
 				if output != "" {
 					if err := writeFrame(engine.TerminalServerMessage{
 						Type: "output",
@@ -78,10 +79,17 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 						return err
 					}
 				}
-				for _, exitCode := range exitCodes {
+				for _, completion := range completions {
+					if err := writeFrame(engine.TerminalServerMessage{
+						Type:   "status",
+						Phase:  "running",
+						Detail: completion.command,
+					}); err != nil {
+						return err
+					}
 					if err := writeFrame(engine.TerminalServerMessage{
 						Type:     "exit",
-						ExitCode: &exitCode,
+						ExitCode: &completion.exitCode,
 					}); err != nil {
 						return err
 					}
@@ -90,24 +98,36 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 			})
 			switch {
 			case streamErr == nil:
-				output, exitCodes := completionTracker.flush()
+				output, completions := completionTracker.flush()
 				if output != "" {
 					_ = writeFrame(engine.TerminalServerMessage{
 						Type: "output",
 						Data: output,
 					})
 				}
-				for _, exitCode := range exitCodes {
+				for _, completion := range completions {
+					_ = writeFrame(engine.TerminalServerMessage{
+						Type:   "status",
+						Phase:  "running",
+						Detail: completion.command,
+					})
 					_ = writeFrame(engine.TerminalServerMessage{
 						Type:     "exit",
-						ExitCode: &exitCode,
+						ExitCode: &completion.exitCode,
 					})
 				}
 				if exitCode, ok := terminalExitCode(session.Wait()); ok {
-					_ = writeFrame(engine.TerminalServerMessage{
-						Type:     "exit",
-						ExitCode: &exitCode,
-					})
+					for _, completion := range commandTracker.finalizePending(exitCode) {
+						_ = writeFrame(engine.TerminalServerMessage{
+							Type:   "status",
+							Phase:  "running",
+							Detail: completion.command,
+						})
+						_ = writeFrame(engine.TerminalServerMessage{
+							Type:     "exit",
+							ExitCode: &completion.exitCode,
+						})
+					}
 				}
 				closeConn(websocket.StatusNormalClosure, "")
 			case !errors.Is(streamErr, context.Canceled):
@@ -120,8 +140,6 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 			<-streamDone
 		}()
 
-		commandTracker := newSubmittedCommandTracker()
-
 		for {
 			var message engine.TerminalClientMessage
 			if err := wsjson.Read(ctx, conn, &message); err != nil {
@@ -130,20 +148,10 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 
 			switch message.Type {
 			case "input":
-				commands := commandTracker.ingest(message.Data)
-				completionTracker.noteSubmittedCommands(len(commands))
+				commandTracker.ingest(message.Data)
 				if err := session.WriteInput(message.Data); err != nil {
 					closeConn(websocket.StatusInternalError, "terminal unavailable")
 					return
-				}
-				for _, command := range commands {
-					if err := writeFrame(engine.TerminalServerMessage{
-						Type:   "status",
-						Phase:  "running",
-						Detail: command,
-					}); err != nil {
-						return
-					}
 				}
 			case "resize":
 				if err := session.Resize(message.Cols, message.Rows); err != nil {
@@ -157,16 +165,23 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 }
 
 type submittedCommandTracker struct {
+	mu             sync.Mutex
 	pending        []rune
 	inEscapeBranch bool
+	promptOwned    bool
+	commands       []string
 }
 
 func newSubmittedCommandTracker() *submittedCommandTracker {
-	return &submittedCommandTracker{}
+	return &submittedCommandTracker{promptOwned: true}
 }
 
-func (t *submittedCommandTracker) ingest(input string) []string {
-	commands := make([]string, 0)
+func (t *submittedCommandTracker) ingest(input string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	allowPromptSubmission := t.promptOwned
+	submittedCommand := false
 
 	for _, char := range input {
 		if t.inEscapeBranch {
@@ -182,7 +197,13 @@ func (t *submittedCommandTracker) ingest(input string) []string {
 		case '\r', '\n':
 			command := strings.TrimSpace(string(t.pending))
 			if command != "" {
-				commands = append(commands, command)
+				if allowPromptSubmission {
+					t.commands = append(t.commands, command)
+					submittedCommand = true
+				} else if len(t.commands) > 0 {
+					last := len(t.commands) - 1
+					t.commands[last] = t.commands[last] + "\n" + command
+				}
 			}
 			t.pending = t.pending[:0]
 		case '\b', 0x7F:
@@ -196,7 +217,55 @@ func (t *submittedCommandTracker) ingest(input string) []string {
 		}
 	}
 
-	return commands
+	if allowPromptSubmission && submittedCommand {
+		t.promptOwned = false
+	}
+}
+
+func (t *submittedCommandTracker) completeCommand(exitCode int) (commandCompletion, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if len(t.commands) == 0 {
+		t.promptOwned = true
+		return commandCompletion{}, false
+	}
+
+	if !isCompleteTopLevelCommand(t.commands[0]) {
+		t.promptOwned = false
+		return commandCompletion{}, false
+	}
+
+	completion := commandCompletion{
+		command:  t.commands[0],
+		exitCode: exitCode,
+	}
+	t.commands = t.commands[1:]
+	t.promptOwned = len(t.commands) == 0
+	return completion, true
+}
+
+func (t *submittedCommandTracker) finalizePending(exitCode int) []commandCompletion {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if len(t.commands) == 0 {
+		t.promptOwned = true
+		return nil
+	}
+
+	completions := make([]commandCompletion, 0, len(t.commands))
+	for _, command := range t.commands {
+		completions = append(completions, commandCompletion{
+			command:  command,
+			exitCode: exitCode,
+		})
+	}
+
+	t.commands = nil
+	t.promptOwned = true
+	t.pending = t.pending[:0]
+	return completions
 }
 
 func terminalExitCode(err error) (int, bool) {
@@ -213,29 +282,25 @@ func terminalExitCode(err error) (int, bool) {
 }
 
 var terminalCommandExitLine = regexp.MustCompile("^" + regexp.QuoteMeta(engine.TerminalCommandExitMarker) + ":(-?\\d+)\\r?$")
+var terminalContinuationPromptLine = regexp.MustCompile("^" + regexp.QuoteMeta(engine.TerminalContinuationPromptMarker) + "\\r?$")
 var terminalANSISequence = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 type commandCompletionTracker struct {
 	mu            sync.Mutex
 	pendingOutput string
-	pendingExits  int
+	commands      *submittedCommandTracker
 }
 
-func newCommandCompletionTracker() *commandCompletionTracker {
-	return &commandCompletionTracker{}
+type commandCompletion struct {
+	command  string
+	exitCode int
 }
 
-func (t *commandCompletionTracker) noteSubmittedCommands(count int) {
-	if count <= 0 {
-		return
-	}
-
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.pendingExits += count
+func newCommandCompletionTracker(commands *submittedCommandTracker) *commandCompletionTracker {
+	return &commandCompletionTracker{commands: commands}
 }
 
-func (t *commandCompletionTracker) ingestOutput(chunk string) (string, []int) {
+func (t *commandCompletionTracker) ingestOutput(chunk string) (string, []commandCompletion) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -243,16 +308,16 @@ func (t *commandCompletionTracker) ingestOutput(chunk string) (string, []int) {
 	return t.drainLocked(false)
 }
 
-func (t *commandCompletionTracker) flush() (string, []int) {
+func (t *commandCompletionTracker) flush() (string, []commandCompletion) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	return t.drainLocked(true)
 }
 
-func (t *commandCompletionTracker) drainLocked(flushAll bool) (string, []int) {
+func (t *commandCompletionTracker) drainLocked(flushAll bool) (string, []commandCompletion) {
 	var output strings.Builder
-	exitCodes := make([]int, 0)
+	completions := make([]commandCompletion, 0)
 
 	for {
 		newline := strings.IndexByte(t.pendingOutput, '\n')
@@ -264,10 +329,12 @@ func (t *commandCompletionTracker) drainLocked(flushAll bool) (string, []int) {
 		t.pendingOutput = t.pendingOutput[newline+1:]
 
 		if exitCode, ok := parseTerminalCommandExitLine(line); ok {
-			if t.pendingExits > 0 {
-				t.pendingExits--
-				exitCodes = append(exitCodes, exitCode)
+			if completion, ok := t.commands.completeCommand(exitCode); ok {
+				completions = append(completions, completion)
 			}
+			continue
+		}
+		if isTerminalContinuationPromptLine(line) {
 			continue
 		}
 
@@ -279,13 +346,11 @@ func (t *commandCompletionTracker) drainLocked(flushAll bool) (string, []int) {
 		t.pendingOutput = ""
 	}
 
-	return output.String(), exitCodes
+	return output.String(), completions
 }
 
 func parseTerminalCommandExitLine(line string) (int, bool) {
-	normalized := strings.TrimSuffix(line, "\n")
-	normalized = strings.TrimSuffix(normalized, "\r")
-	normalized = terminalANSISequence.ReplaceAllString(normalized, "")
+	normalized := normalizeTerminalMarkerLine(line)
 
 	match := terminalCommandExitLine.FindStringSubmatch(normalized)
 	if len(match) != 2 {
@@ -300,10 +365,146 @@ func parseTerminalCommandExitLine(line string) (int, bool) {
 	return exitCode, true
 }
 
+func isTerminalContinuationPromptLine(line string) bool {
+	return terminalContinuationPromptLine.MatchString(normalizeTerminalMarkerLine(line))
+}
+
+func normalizeTerminalMarkerLine(line string) string {
+	normalized := strings.TrimSuffix(line, "\n")
+	normalized = strings.TrimSuffix(normalized, "\r")
+	return terminalANSISequence.ReplaceAllString(normalized, "")
+}
+
 func couldBeExitMarkerFragment(value string) bool {
 	if value == "" {
 		return false
 	}
 
 	return strings.HasPrefix(engine.TerminalCommandExitMarker, value)
+}
+
+func isCompleteTopLevelCommand(command string) bool {
+	if strings.TrimSpace(command) == "" {
+		return false
+	}
+
+	if hasTrailingContinuation(strings.TrimSpace(command)) {
+		return false
+	}
+
+	if hasUnclosedDelimitedSections(command) {
+		return false
+	}
+
+	if hasUnclosedShellBlock(command) {
+		return false
+	}
+
+	return true
+}
+
+func hasTrailingContinuation(command string) bool {
+	lines := strings.Split(command, "\n")
+	if len(lines) == 0 {
+		return false
+	}
+
+	last := strings.TrimSpace(lines[len(lines)-1])
+	if last == "" {
+		return false
+	}
+
+	for _, suffix := range []string{"`", "\\", "|", "&&", "||"} {
+		if strings.HasSuffix(last, suffix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasUnclosedDelimitedSections(command string) bool {
+	braceDepth := 0
+	parenDepth := 0
+	bracketDepth := 0
+	inSingleQuote := false
+	inDoubleQuote := false
+	escaped := false
+
+	for _, char := range command {
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		switch char {
+		case '\\', '`':
+			if !inSingleQuote {
+				escaped = true
+			}
+		case '\'':
+			if !inDoubleQuote {
+				inSingleQuote = !inSingleQuote
+			}
+		case '"':
+			if !inSingleQuote {
+				inDoubleQuote = !inDoubleQuote
+			}
+		default:
+			if inSingleQuote || inDoubleQuote {
+				continue
+			}
+			switch char {
+			case '{':
+				braceDepth++
+			case '}':
+				braceDepth--
+			case '(':
+				parenDepth++
+			case ')':
+				parenDepth--
+			case '[':
+				bracketDepth++
+			case ']':
+				bracketDepth--
+			}
+		}
+	}
+
+	return inSingleQuote ||
+		inDoubleQuote ||
+		braceDepth > 0 ||
+		parenDepth > 0 ||
+		bracketDepth > 0
+}
+
+func hasUnclosedShellBlock(command string) bool {
+	blockDepth := 0
+
+	for _, line := range strings.Split(command, "\n") {
+		normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(line)), " "))
+		if normalized == "" {
+			continue
+		}
+
+		switch {
+		case normalized == "fi" || strings.HasPrefix(normalized, "fi "):
+			blockDepth--
+		case normalized == "done" || strings.HasPrefix(normalized, "done "):
+			blockDepth--
+		case normalized == "esac" || strings.HasPrefix(normalized, "esac "):
+			blockDepth--
+		}
+
+		switch {
+		case normalized == "then" || strings.HasSuffix(normalized, " then"):
+			blockDepth++
+		case normalized == "do" || strings.HasSuffix(normalized, " do"):
+			blockDepth++
+		case strings.HasSuffix(normalized, " in"):
+			blockDepth++
+		}
+	}
+
+	return blockDepth > 0
 }

@@ -39,7 +39,7 @@ export function useTerminalSession(
   const protocolReadyRef = useRef(false);
   const reconnectTokenRef = useRef(0);
   const historyEntryCountRef = useRef(0);
-  const lastCommandEntryIdRef = useRef<string | null>(null);
+  const pendingCommandEntryIdsRef = useRef<string[]>([]);
   const sessionId = session?.id ?? null;
   const [status, setStatus] = useState<TerminalSessionState["status"]>("idle");
   const [transcript, setTranscript] = useState<string[]>([]);
@@ -52,7 +52,7 @@ export function useTerminalSession(
     reconnectTokenRef.current += 1;
     protocolReadyRef.current = false;
     historyEntryCountRef.current = 0;
-    lastCommandEntryIdRef.current = null;
+    pendingCommandEntryIdsRef.current = [];
 
     if (socketRef.current) {
       socketRef.current.close();
@@ -141,7 +141,10 @@ export function useTerminalSession(
 
           const entryId = `${sessionId ?? "terminal"}-${historyEntryCountRef.current}`;
           historyEntryCountRef.current += 1;
-          lastCommandEntryIdRef.current = entryId;
+          pendingCommandEntryIdsRef.current = [
+            ...pendingCommandEntryIdsRef.current,
+            entryId,
+          ];
           setHistory((entries) => [
             ...entries,
             {
@@ -155,14 +158,16 @@ export function useTerminalSession(
           return;
         }
         case "exit": {
-          const latestEntryId = lastCommandEntryIdRef.current;
-          if (!latestEntryId) {
+          const [nextEntryId, ...remainingEntryIds] =
+            pendingCommandEntryIdsRef.current;
+          if (!nextEntryId) {
             return;
           }
 
+          pendingCommandEntryIdsRef.current = remainingEntryIds;
           setHistory((entries) =>
             entries.map((entry) =>
-              entry.id === latestEntryId
+              entry.id === nextEntryId
                 ? {
                     ...entry,
                     exitCode: frame.exitCode,
@@ -177,7 +182,6 @@ export function useTerminalSession(
                 : entry,
             ),
           );
-          lastCommandEntryIdRef.current = null;
           return;
         }
         case "error":

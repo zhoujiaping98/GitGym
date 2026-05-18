@@ -1,6 +1,7 @@
 package engine
 
 const TerminalCommandExitMarker = "__GITGYM_COMMAND_EXIT__"
+const TerminalContinuationPromptMarker = "__GITGYM_CONTINUATION_PROMPT__"
 
 type TerminalClientMessage struct {
 	Type string `json:"type"`

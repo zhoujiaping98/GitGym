@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -181,6 +182,45 @@ func TestTerminalWebSocketEmitsCommandExitFramesBeforeSessionClose(t *testing.T)
 	}
 
 	assertTerminalCommandCompletion(t, conn, strings.TrimSpace(secondCommand), 0)
+}
+
+func TestTerminalWebSocketWaitsForPromptBeforeEmittingCommandCompletionFrames(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PowerShell continuation prompt lifecycle is covered in handler tracker tests")
+	}
+
+	workspace := createGitWorkspace(t)
+	manager := engine.NewTerminalManager()
+	conn := dialTerminalWebSocket(t, workspace.ID, filepath.Dir(workspace.Path), manager)
+	defer closeTerminalWebSocket(t, conn)
+	t.Cleanup(func() {
+		releaseManagedTerminalSocketSession(t, manager, workspace)
+	})
+
+	assertTerminalReadyFrame(t, conn)
+
+	commandLines, wantCommand, wantOutput := shellMultilineCommand(terminalMarker("ws-multiline"))
+
+	if err := wsjson.Write(context.Background(), conn, engine.TerminalClientMessage{
+		Type: "input",
+		Data: commandLines[0],
+	}); err != nil {
+		t.Fatalf("write multiline terminal command start: %v", err)
+	}
+
+	assertTerminalDoesNotEmitCommandLifecycleFrame(t, conn, 300*time.Millisecond)
+
+	for _, line := range commandLines[1:] {
+		if err := wsjson.Write(context.Background(), conn, engine.TerminalClientMessage{
+			Type: "input",
+			Data: line,
+		}); err != nil {
+			t.Fatalf("write multiline terminal command continuation: %v", err)
+		}
+	}
+
+	assertTerminalCommandCompletionWithOutput(t, conn, wantCommand, wantOutput, 0)
+	assertTerminalDoesNotEmitCommandLifecycleFrame(t, conn, 300*time.Millisecond)
 }
 
 func dialTerminalWebSocket(t *testing.T, workspaceID string, workRoot string, manager *engine.TerminalManager) *websocket.Conn {
@@ -358,4 +398,111 @@ func assertTerminalCommandCompletion(t *testing.T, conn *websocket.Conn, wantCom
 			exitSeen = true
 		}
 	}
+}
+
+func assertTerminalCommandCompletionWithOutput(t *testing.T, conn *websocket.Conn, wantCommand string, wantOutput *regexp.Regexp, wantExitCode int) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	statusSeen := false
+	exitSeen := false
+	outputSeen := wantOutput == nil
+	frames := make([]string, 0, 12)
+	var outputBuilder strings.Builder
+
+	for !statusSeen || !exitSeen || !outputSeen {
+		var message engine.TerminalServerMessage
+		if err := wsjson.Read(ctx, conn, &message); err != nil {
+			t.Fatalf(
+				"read command completion frame: %v (statusSeen=%t exitSeen=%t outputSeen=%t frames=%v output=%q)",
+				err,
+				statusSeen,
+				exitSeen,
+				outputSeen,
+				frames,
+				outputBuilder.String(),
+			)
+		}
+		frames = append(frames, fmt.Sprintf("%s:%q:%q:%q:%v", message.Type, message.Phase, message.Detail, message.Data, message.ExitCode))
+
+		switch message.Type {
+		case "output":
+			outputBuilder.WriteString(message.Data)
+			if wantOutput != nil && wantOutput.MatchString(outputBuilder.String()) {
+				outputSeen = true
+			}
+		case "status":
+			if message.Phase != "running" {
+				continue
+			}
+			if message.Detail != wantCommand {
+				t.Fatalf("expected status detail %q, got %q", wantCommand, message.Detail)
+			}
+			statusSeen = true
+		case "exit":
+			if message.ExitCode == nil {
+				t.Fatal("expected exit frame to include exitCode")
+			}
+			if *message.ExitCode != wantExitCode {
+				t.Fatalf("expected exitCode %d, got %d", wantExitCode, *message.ExitCode)
+			}
+			exitSeen = true
+		}
+	}
+}
+
+func assertTerminalDoesNotEmitCommandLifecycleFrame(t *testing.T, conn *websocket.Conn, timeout time.Duration) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for {
+		var message engine.TerminalServerMessage
+		if err := wsjson.Read(ctx, conn, &message); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return
+			}
+			if websocket.CloseStatus(err) != -1 {
+				t.Fatalf("terminal websocket closed unexpectedly while waiting for prompt return: %v", err)
+			}
+			t.Fatalf("read command lifecycle frame: %v", err)
+		}
+
+		if message.Type == "status" || message.Type == "exit" {
+			t.Fatalf("expected no command lifecycle frame before shell prompt return, got %+v", message)
+		}
+	}
+}
+
+func shellMultilineCommand(marker string) ([]string, string, *regexp.Regexp) {
+	if runtime.GOOS == "windows" {
+		lines := []string{
+			"if ($true) {\r\n",
+			fmt.Sprintf("Write-Output \"%s:__GITGYM_WS_MULTILINE__\"\r\n", marker),
+			"}\r\n",
+		}
+		return lines, normalizeSubmittedCommandLines(lines), terminalLinePattern(marker, "__GITGYM_WS_MULTILINE__")
+	}
+
+	lines := []string{
+		"if true; then\n",
+		fmt.Sprintf("printf '%s:__GITGYM_WS_MULTILINE__\\n'\n", marker),
+		"fi\n",
+	}
+	return lines, normalizeSubmittedCommandLines(lines), terminalLinePattern(marker, "__GITGYM_WS_MULTILINE__")
+}
+
+func normalizeSubmittedCommandLines(lines []string) string {
+	normalized := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	return strings.Join(normalized, "\n")
 }
