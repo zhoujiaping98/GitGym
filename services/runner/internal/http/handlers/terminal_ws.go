@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -167,6 +168,7 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 type submittedCommandTracker struct {
 	mu             sync.Mutex
 	pending        []rune
+	pendingCommand string
 	inEscapeBranch bool
 	promptOwned    bool
 	commands       []string
@@ -180,10 +182,17 @@ func (t *submittedCommandTracker) ingest(input string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	allowPromptSubmission := t.promptOwned
-	submittedCommand := false
+	trackCommands := t.promptOwned || strings.TrimSpace(t.pendingCommand) != ""
+	sawCarriageReturn := false
 
 	for _, char := range input {
+		if sawCarriageReturn {
+			sawCarriageReturn = false
+			if char == '\n' {
+				continue
+			}
+		}
+
 		if t.inEscapeBranch {
 			if char >= 0x40 && char <= 0x7E {
 				t.inEscapeBranch = false
@@ -194,18 +203,11 @@ func (t *submittedCommandTracker) ingest(input string) {
 		switch char {
 		case 0x1B:
 			t.inEscapeBranch = true
-		case '\r', '\n':
-			command := strings.TrimSpace(string(t.pending))
-			if command != "" {
-				if allowPromptSubmission {
-					t.commands = append(t.commands, command)
-					submittedCommand = true
-				} else if len(t.commands) > 0 {
-					last := len(t.commands) - 1
-					t.commands[last] = t.commands[last] + "\n" + command
-				}
-			}
-			t.pending = t.pending[:0]
+		case '\r':
+			sawCarriageReturn = true
+			t.submitPendingLine(trackCommands)
+		case '\n':
+			t.submitPendingLine(trackCommands)
 		case '\b', 0x7F:
 			if len(t.pending) > 0 {
 				t.pending = t.pending[:len(t.pending)-1]
@@ -215,10 +217,6 @@ func (t *submittedCommandTracker) ingest(input string) {
 				t.pending = append(t.pending, char)
 			}
 		}
-	}
-
-	if allowPromptSubmission && submittedCommand {
-		t.promptOwned = false
 	}
 }
 
@@ -241,7 +239,7 @@ func (t *submittedCommandTracker) completeCommand(exitCode int) (commandCompleti
 		exitCode: exitCode,
 	}
 	t.commands = t.commands[1:]
-	t.promptOwned = len(t.commands) == 0
+	t.promptOwned = len(t.commands) == 0 && strings.TrimSpace(t.pendingCommand) == ""
 	return completion, true
 }
 
@@ -265,7 +263,48 @@ func (t *submittedCommandTracker) finalizePending(exitCode int) []commandComplet
 	t.commands = nil
 	t.promptOwned = true
 	t.pending = t.pending[:0]
+	t.pendingCommand = ""
 	return completions
+}
+
+func (t *submittedCommandTracker) submitPendingLine(trackCommands bool) {
+	line := strings.TrimSpace(string(t.pending))
+	t.pending = t.pending[:0]
+
+	if !trackCommands {
+		return
+	}
+
+	if line == "" {
+		if strings.TrimSpace(t.pendingCommand) == "" {
+			return
+		}
+		line = ""
+	}
+
+	command := line
+	if strings.TrimSpace(t.pendingCommand) != "" {
+		if command == "" {
+			command = t.pendingCommand + "\n"
+		} else {
+			command = t.pendingCommand + "\n" + command
+		}
+	}
+
+	if strings.TrimSpace(command) == "" {
+		t.pendingCommand = ""
+		return
+	}
+
+	if isCompleteTopLevelCommand(command) {
+		t.commands = append(t.commands, command)
+		t.pendingCommand = ""
+		t.promptOwned = false
+		return
+	}
+
+	t.pendingCommand = command
+	t.promptOwned = false
 }
 
 func terminalExitCode(err error) (int, bool) {
@@ -384,26 +423,45 @@ func couldBeExitMarkerFragment(value string) bool {
 }
 
 func isCompleteTopLevelCommand(command string) bool {
+	return isCompleteTopLevelCommandForShell(detectShellDialect(), command)
+}
+
+type shellDialect string
+
+const (
+	posixShellDialect      shellDialect = "posix"
+	powershellShellDialect shellDialect = "powershell"
+)
+
+func detectShellDialect() shellDialect {
+	if runtime.GOOS == "windows" {
+		return powershellShellDialect
+	}
+
+	return posixShellDialect
+}
+
+func isCompleteTopLevelCommandForShell(shell shellDialect, command string) bool {
 	if strings.TrimSpace(command) == "" {
 		return false
 	}
 
-	if hasTrailingContinuation(strings.TrimSpace(command)) {
+	if hasTrailingContinuation(shell, strings.TrimSpace(command)) {
 		return false
 	}
 
-	if hasUnclosedDelimitedSections(command) {
+	if hasUnclosedDelimitedSections(shell, command) {
 		return false
 	}
 
-	if hasUnclosedShellBlock(command) {
+	if hasUnclosedShellBlock(shell, command) {
 		return false
 	}
 
 	return true
 }
 
-func hasTrailingContinuation(command string) bool {
+func hasTrailingContinuation(shell shellDialect, command string) bool {
 	lines := strings.Split(command, "\n")
 	if len(lines) == 0 {
 		return false
@@ -414,7 +472,14 @@ func hasTrailingContinuation(command string) bool {
 		return false
 	}
 
-	for _, suffix := range []string{"`", "\\", "|", "&&", "||"} {
+	suffixes := []string{"|", "&&", "||"}
+	if shell == powershellShellDialect {
+		suffixes = append([]string{"`"}, suffixes...)
+	} else {
+		suffixes = append([]string{"\\", "`"}, suffixes...)
+	}
+
+	for _, suffix := range suffixes {
 		if strings.HasSuffix(last, suffix) {
 			return true
 		}
@@ -423,7 +488,7 @@ func hasTrailingContinuation(command string) bool {
 	return false
 }
 
-func hasUnclosedDelimitedSections(command string) bool {
+func hasUnclosedDelimitedSections(shell shellDialect, command string) bool {
 	braceDepth := 0
 	parenDepth := 0
 	bracketDepth := 0
@@ -431,19 +496,30 @@ func hasUnclosedDelimitedSections(command string) bool {
 	inDoubleQuote := false
 	escaped := false
 
-	for _, char := range command {
+	runes := []rune(command)
+	for index := 0; index < len(runes); index++ {
+		char := runes[index]
+
 		if escaped {
 			escaped = false
 			continue
 		}
 
 		switch char {
-		case '\\', '`':
-			if !inSingleQuote {
+		case '\\':
+			if shell != powershellShellDialect && !inSingleQuote {
+				escaped = true
+			}
+		case '`':
+			if shell == powershellShellDialect && !inSingleQuote {
 				escaped = true
 			}
 		case '\'':
 			if !inDoubleQuote {
+				if shell == powershellShellDialect && inSingleQuote && index+1 < len(runes) && runes[index+1] == '\'' {
+					index++
+					continue
+				}
 				inSingleQuote = !inSingleQuote
 			}
 		case '"':
@@ -478,7 +554,11 @@ func hasUnclosedDelimitedSections(command string) bool {
 		bracketDepth > 0
 }
 
-func hasUnclosedShellBlock(command string) bool {
+func hasUnclosedShellBlock(shell shellDialect, command string) bool {
+	if shell == powershellShellDialect {
+		return false
+	}
+
 	blockDepth := 0
 
 	for _, line := range strings.Split(command, "\n") {
