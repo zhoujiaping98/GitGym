@@ -32,7 +32,10 @@ export function CommandHistoryPanel({
             <article key={entry.id} className="history-entry">
               <div className="history-entry-command">{entry.command}</div>
               <div className="history-entry-meta">
-                <span>{entry.summary ?? "Command captured"}</span>
+                <span>
+                  {entry.summary ??
+                    (entry.phase === "stopped" ? "Command finished" : "Command running")}
+                </span>
                 {entry.exitCode != null ? <span>exit {entry.exitCode}</span> : null}
               </div>
             </article>

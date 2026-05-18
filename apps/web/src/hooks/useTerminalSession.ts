@@ -38,6 +38,8 @@ export function useTerminalSession(
   const socketRef = useRef<WebSocket | null>(null);
   const protocolReadyRef = useRef(false);
   const reconnectTokenRef = useRef(0);
+  const historyEntryCountRef = useRef(0);
+  const lastCommandEntryIdRef = useRef<string | null>(null);
   const sessionId = session?.id ?? null;
   const [status, setStatus] = useState<TerminalSessionState["status"]>("idle");
   const [transcript, setTranscript] = useState<string[]>([]);
@@ -49,6 +51,8 @@ export function useTerminalSession(
   useEffect(() => {
     reconnectTokenRef.current += 1;
     protocolReadyRef.current = false;
+    historyEntryCountRef.current = 0;
+    lastCommandEntryIdRef.current = null;
 
     if (socketRef.current) {
       socketRef.current.close();
@@ -129,12 +133,56 @@ export function useTerminalSession(
         case "output":
           setTranscript((lines) => [...lines, frame.data]);
           return;
+        case "status": {
+          const command = frame.detail?.trim();
+          if (frame.phase !== "running" || !command) {
+            return;
+          }
+
+          const entryId = `${sessionId ?? "terminal"}-${historyEntryCountRef.current}`;
+          historyEntryCountRef.current += 1;
+          lastCommandEntryIdRef.current = entryId;
+          setHistory((entries) => [
+            ...entries,
+            {
+              id: entryId,
+              command,
+              executedAt: new Date().toISOString(),
+              phase: "running",
+              summary: "Command running",
+            },
+          ]);
+          return;
+        }
+        case "exit": {
+          const latestEntryId = lastCommandEntryIdRef.current;
+          if (!latestEntryId) {
+            return;
+          }
+
+          setHistory((entries) =>
+            entries.map((entry) =>
+              entry.id === latestEntryId
+                ? {
+                    ...entry,
+                    exitCode: frame.exitCode,
+                    phase: "stopped",
+                    summary:
+                      frame.exitCode == null
+                        ? "Command finished"
+                        : frame.exitCode === 0
+                          ? "Command finished successfully"
+                          : "Command finished with errors",
+                  }
+                : entry,
+            ),
+          );
+          lastCommandEntryIdRef.current = null;
+          return;
+        }
         case "error":
           setStatus("error");
           setError(frame.message);
-          return;
-        case "status":
-        case "exit":
           return;
         default:
           return;

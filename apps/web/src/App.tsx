@@ -23,6 +23,11 @@ type ActionErrorState = {
   retryExpectedSessionId?: number;
 };
 
+type SessionReconcileOptions = {
+  fallbackSession?: PracticeSession | null;
+  optimisticSession?: PracticeSession | null;
+};
+
 type AppStateShellProps = {
   eyebrow: string;
   title: string;
@@ -103,12 +108,16 @@ export default function App() {
   async function reconcileSessionAction(
     action: "reset" | "new-session",
     expectedSessionId: number,
+    options: SessionReconcileOptions = {},
   ) {
+    const fallbackSession = options.fallbackSession ?? null;
+    const optimisticSession = options.optimisticSession ?? null;
+
     try {
       const refreshedSession = await currentSession.refresh();
 
       if (!refreshedSession) {
-        setSessionOverride(null);
+        setSessionOverride(fallbackSession ?? optimisticSession);
         setActionError({
           message:
             action === "new-session"
@@ -130,9 +139,10 @@ export default function App() {
         return;
       }
 
+      setSessionOverride(refreshedSession);
       setActionError(null);
     } catch (error) {
-      setSessionOverride(null);
+      setSessionOverride(fallbackSession ?? optimisticSession);
       setActionError({
         message: `${
           action === "new-session"
@@ -181,6 +191,8 @@ export default function App() {
   }
 
   function startNewSession(scenarioId: number, templateId: number) {
+    const fallbackSession = displayedSession;
+
     setActionError(null);
     setPendingAction("new-session");
     void createPracticeSession({
@@ -188,8 +200,13 @@ export default function App() {
       templateId,
     })
       .then((nextSession) => {
-        setSessionOverride(nextSession);
-        return reconcileSessionAction("new-session", nextSession.id);
+        if (!fallbackSession) {
+          setSessionOverride(nextSession);
+        }
+        return reconcileSessionAction("new-session", nextSession.id, {
+          fallbackSession,
+          optimisticSession: nextSession,
+        });
       })
       .catch((error: unknown) => {
         setActionError({
@@ -227,7 +244,10 @@ export default function App() {
             setPendingAction("reset");
             void resetPracticeSession(session.id)
               .then(() => {
-                return reconcileSessionAction("reset", session.id);
+                return reconcileSessionAction("reset", session.id, {
+                  fallbackSession: session,
+                  optimisticSession: session,
+                });
               })
               .catch((error: unknown) => {
                 setActionError({

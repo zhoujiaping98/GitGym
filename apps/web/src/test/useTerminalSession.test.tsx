@@ -199,6 +199,50 @@ describe("useTerminalSession", () => {
     expect(result.current.error).toBe("Terminal transport is unavailable for this session.");
   });
 
+  it("appends entered commands to command history after submit", async () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+
+    const { result } = renderHook(() => useTerminalSession(activeSession));
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+
+    act(() => {
+      MockWebSocket.instances[0].emit("open");
+      MockWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({ type: "ready", cols: 120, rows: 40 }),
+      } as MessageEvent);
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("ready");
+    });
+
+    act(() => {
+      result.current.sendInput("git status\r");
+      MockWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({
+          type: "status",
+          phase: "running",
+          detail: "git status",
+        }),
+      } as MessageEvent);
+      MockWebSocket.instances[0].emit("message", {
+        data: JSON.stringify({ type: "exit", exitCode: 0 }),
+      } as MessageEvent);
+    });
+
+    await waitFor(() => {
+      expect(result.current.history).toHaveLength(1);
+    });
+
+    expect(result.current.history[0]).toMatchObject({
+      command: "git status",
+      exitCode: 0,
+    });
+  });
+
   it("preserves terminal state when the session object changes but the id stays the same", async () => {
     vi.stubGlobal("WebSocket", MockWebSocket);
 

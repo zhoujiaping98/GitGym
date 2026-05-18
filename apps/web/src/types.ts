@@ -27,6 +27,7 @@ export type CommandHistoryEntry = {
   command: string;
   executedAt?: string;
   exitCode?: number | null;
+  phase?: "running" | "stopped";
   summary?: string;
 };
 

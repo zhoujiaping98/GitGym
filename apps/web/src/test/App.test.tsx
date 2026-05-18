@@ -760,4 +760,43 @@ describe("App", () => {
     expect(firstMount).toBe(secondMount);
     expect(mockTerminalInstances).toHaveLength(1);
   });
+
+  it("does not destroy the xterm mount during refresh boundaries", async () => {
+    const refresh = vi.fn().mockRejectedValue(new Error("api offline"));
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh,
+    });
+
+    mockUseTerminalSession.mockImplementation((session: typeof activeSession | null) =>
+      createTerminalState({
+        status: "ready",
+        terminalUrl: session
+          ? `ws://localhost:3000/api/v1/practice-sessions/${session.id}/terminal`
+          : null,
+      }),
+    );
+
+    render(<App />);
+
+    const firstMount = await screen.findByTestId("live-terminal");
+
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByText("Created a new session, but refreshing it failed: api offline"),
+      ).toBeInTheDocument();
+    });
+
+    const secondMount = await screen.findByTestId("live-terminal");
+
+    expect(firstMount).toBe(secondMount);
+    expect(mockTerminalInstances).toHaveLength(1);
+  });
 });

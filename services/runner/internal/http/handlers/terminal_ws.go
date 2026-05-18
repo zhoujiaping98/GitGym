@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
+	"unicode"
 
 	"gitgym/services/runner/internal/engine"
 	"github.com/coder/websocket"
@@ -34,10 +36,17 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 		defer cancel()
 
 		var closeOnce sync.Once
+		var writeMu sync.Mutex
 		closeConn := func(code websocket.StatusCode, reason string) {
 			closeOnce.Do(func() {
 				_ = conn.Close(code, reason)
 			})
+		}
+		writeFrame := func(message engine.TerminalServerMessage) error {
+			writeMu.Lock()
+			defer writeMu.Unlock()
+
+			return wsjson.Write(ctx, conn, message)
 		}
 
 		session, err := manager.Acquire(ctx, workspacePath, workspaceID)
@@ -46,7 +55,7 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 			return
 		}
 
-		if err := wsjson.Write(ctx, conn, engine.TerminalServerMessage{
+		if err := writeFrame(engine.TerminalServerMessage{
 			Type: "ready",
 			Cols: 120,
 			Rows: 30,
@@ -57,13 +66,19 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 		streamDone := make(chan error, 1)
 		go func() {
 			streamErr := session.ReadLoop(ctx, func(chunk []byte) error {
-				return wsjson.Write(ctx, conn, engine.TerminalServerMessage{
+				return writeFrame(engine.TerminalServerMessage{
 					Type: "output",
 					Data: string(chunk),
 				})
 			})
 			switch {
 			case streamErr == nil:
+				if exitCode, ok := terminalExitCode(session.Wait()); ok {
+					_ = writeFrame(engine.TerminalServerMessage{
+						Type:     "exit",
+						ExitCode: &exitCode,
+					})
+				}
 				closeConn(websocket.StatusNormalClosure, "")
 			case !errors.Is(streamErr, context.Canceled):
 				closeConn(websocket.StatusInternalError, "terminal stream failed")
@@ -74,6 +89,8 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 			cancel()
 			<-streamDone
 		}()
+
+		commandTracker := newSubmittedCommandTracker()
 
 		for {
 			var message engine.TerminalClientMessage
@@ -87,6 +104,15 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 					closeConn(websocket.StatusInternalError, "terminal unavailable")
 					return
 				}
+				for _, command := range commandTracker.ingest(message.Data) {
+					if err := writeFrame(engine.TerminalServerMessage{
+						Type:   "status",
+						Phase:  "running",
+						Detail: command,
+					}); err != nil {
+						return
+					}
+				}
 			case "resize":
 				if err := session.Resize(message.Cols, message.Rows); err != nil {
 					closeConn(websocket.StatusInternalError, "terminal unavailable")
@@ -96,4 +122,60 @@ func TerminalWebSocket(workRoot string, manager *engine.TerminalManager) http.Ha
 			}
 		}
 	}
+}
+
+type submittedCommandTracker struct {
+	pending        []rune
+	inEscapeBranch bool
+}
+
+func newSubmittedCommandTracker() *submittedCommandTracker {
+	return &submittedCommandTracker{}
+}
+
+func (t *submittedCommandTracker) ingest(input string) []string {
+	commands := make([]string, 0)
+
+	for _, char := range input {
+		if t.inEscapeBranch {
+			if char >= 0x40 && char <= 0x7E {
+				t.inEscapeBranch = false
+			}
+			continue
+		}
+
+		switch char {
+		case 0x1B:
+			t.inEscapeBranch = true
+		case '\r', '\n':
+			command := strings.TrimSpace(string(t.pending))
+			if command != "" {
+				commands = append(commands, command)
+			}
+			t.pending = t.pending[:0]
+		case '\b', 0x7F:
+			if len(t.pending) > 0 {
+				t.pending = t.pending[:len(t.pending)-1]
+			}
+		default:
+			if unicode.IsPrint(char) {
+				t.pending = append(t.pending, char)
+			}
+		}
+	}
+
+	return commands
+}
+
+func terminalExitCode(err error) (int, bool) {
+	if err == nil {
+		return 0, true
+	}
+
+	var closeErr websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return 0, false
+	}
+
+	return 0, false
 }
