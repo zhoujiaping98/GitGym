@@ -1,6 +1,148 @@
-import { expect, test } from "@playwright/test";
+import { type AddressInfo } from "node:net";
+import { expect, test, type Page } from "@playwright/test";
+import { WebSocketServer } from "ws";
+
+type TerminalStub = {
+  close: () => Promise<void>;
+  connectionCount: () => number;
+  port: number;
+};
+
+async function createTerminalStub(): Promise<TerminalStub> {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>((resolve) => {
+    server.once("listening", () => resolve());
+  });
+
+  let connectionCount = 0;
+
+  server.on("connection", (socket) => {
+    connectionCount += 1;
+    let currentCommand = "";
+
+    socket.send(JSON.stringify({ type: "ready", cols: 120, rows: 40 }));
+    socket.send(
+      JSON.stringify({
+        type: "output",
+        data: "PS D:\\\\Project\\\\GitGym\\\\var\\\\workspaces\\\\ws-42> ",
+      }),
+    );
+
+    socket.on("message", (payload) => {
+      const frame = JSON.parse(payload.toString()) as
+        | { type: "input"; data: string }
+        | { type: "resize"; cols: number; rows: number };
+
+      if (frame.type !== "input") {
+        return;
+      }
+
+      for (const chunk of frame.data) {
+        if (chunk === "\r") {
+          const command = currentCommand.trim();
+          currentCommand = "";
+          if (!command) {
+            socket.send(JSON.stringify({ type: "output", data: "\r\n" }));
+            socket.send(
+              JSON.stringify({
+                type: "output",
+                data: "PS D:\\\\Project\\\\GitGym\\\\var\\\\workspaces\\\\ws-42> ",
+              }),
+            );
+            continue;
+          }
+
+          socket.send(
+            JSON.stringify({
+              type: "status",
+              phase: "running",
+              detail: command,
+            }),
+          );
+          socket.send(
+            JSON.stringify({
+              type: "output",
+              data: `$ ${command}\r\n`,
+            }),
+          );
+          socket.send(
+            JSON.stringify({
+              type: "output",
+              data:
+                command === "pwd"
+                  ? "D:\\\\Project\\\\GitGym\\\\var\\\\workspaces\\\\ws-42\r\n"
+                  : "On branch main\r\nnothing to commit, working tree clean\r\n",
+            }),
+          );
+          socket.send(JSON.stringify({ type: "exit", exitCode: 0 }));
+          socket.send(
+            JSON.stringify({
+              type: "output",
+              data: "PS D:\\\\Project\\\\GitGym\\\\var\\\\workspaces\\\\ws-42> ",
+            }),
+          );
+          continue;
+        }
+
+        if (chunk !== "\n") {
+          currentCommand += chunk;
+        }
+      }
+    });
+  });
+
+  const { port } = server.address() as AddressInfo;
+
+  return {
+    port,
+    connectionCount: () => connectionCount,
+    close: async () => {
+      for (const client of server.clients) {
+        client.close();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+async function routeTerminalWebSocketToStub(page: Page, port: number) {
+  await page.addInitScript((stubPort: number) => {
+    const NativeWebSocket = window.WebSocket;
+
+    class TerminalTestWebSocket extends NativeWebSocket {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        const nextUrl = new URL(typeof url === "string" ? url : url.toString());
+        if (nextUrl.pathname.startsWith("/api/v1/practice-sessions/")) {
+          nextUrl.protocol = "ws:";
+          nextUrl.hostname = "127.0.0.1";
+          nextUrl.port = String(stubPort);
+        }
+        super(nextUrl.toString(), protocols);
+      }
+    }
+
+    Object.defineProperties(TerminalTestWebSocket, {
+      CONNECTING: { value: NativeWebSocket.CONNECTING },
+      OPEN: { value: NativeWebSocket.OPEN },
+      CLOSING: { value: NativeWebSocket.CLOSING },
+      CLOSED: { value: NativeWebSocket.CLOSED },
+    });
+
+    window.WebSocket = TerminalTestWebSocket as typeof WebSocket;
+  }, port);
+}
 
 test.describe("GitGym shell", () => {
+  let terminalStub: TerminalStub;
+
   const activeSessionPayload = {
     session: {
       id: 42,
@@ -15,6 +157,15 @@ test.describe("GitGym shell", () => {
       last_activity_at: "2026-05-16T10:05:00.000Z",
     },
   };
+
+  test.beforeEach(async ({ page }) => {
+    terminalStub = await createTerminalStub();
+    await routeTerminalWebSocketToStub(page, terminalStub.port);
+  });
+
+  test.afterEach(async () => {
+    await terminalStub.close();
+  });
 
   test("shows the signed-out login shell when there is no active session", async ({
     page,
@@ -133,16 +284,59 @@ test.describe("GitGym shell", () => {
     ).toBeVisible();
 
     await page.getByRole("button", { name: "New Session" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Checking session" }),
+    ).toBeVisible();
+    releaseRefresh?.();
     await expect(page.getByText("runner-43")).toBeVisible();
     await expect(page.getByText("/tmp/gitgym/session-43")).toBeVisible();
     await expect(page.getByText("session #43")).toBeVisible();
     await expect(page.getByRole("button", { name: "Reset" })).toBeVisible();
-    releaseRefresh?.();
     await page.getByRole("button", { name: "Reset" }).click();
 
     expect(createSessionCalls).toBe(1);
     expect(resetOldSessionCalls).toBe(0);
     expect(resetNewSessionCalls).toBe(1);
+  });
+
+  test("keeps the terminal interactive across a page refresh", async ({ page }) => {
+    await page.route("**/api/v1/practice-sessions/current", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(activeSessionPayload),
+      });
+    });
+
+    await page.goto("/");
+
+    await expect(page.getByText("Session live")).toBeVisible();
+    await expect(page.getByText("interactive")).toBeVisible();
+    await expect(page.locator(".terminal-window")).toContainText("ws-42>");
+
+    await page.getByTestId("live-terminal").click();
+    await page.keyboard.type("pwd");
+    await page.keyboard.press("Enter");
+
+    await expect(page.locator(".terminal-window")).toContainText("$ pwd");
+    await expect(page.locator(".terminal-window")).toContainText(
+      /workspaces\\+ws-42/,
+    );
+
+    await page.reload();
+
+    await expect(page.getByText("Session live")).toBeVisible();
+    await expect(page.getByText("interactive")).toBeVisible();
+    await expect.poll(() => terminalStub.connectionCount()).toBe(2);
+
+    await page.getByTestId("live-terminal").click();
+    await page.keyboard.type("git status");
+    await page.keyboard.press("Enter");
+
+    await expect(page.locator(".terminal-window")).toContainText("$ git status");
+    await expect(page.locator(".terminal-window")).toContainText(
+      /nothing to commit, working tree clean/,
+    );
   });
 
   test("shows a retryable session error state when lookup fails", async ({
@@ -222,13 +416,12 @@ test.describe("GitGym shell", () => {
 
     await page.getByRole("button", { name: "New Session" }).click();
 
-    await expect(
-      page.getByRole("heading", { name: "Session unavailable" }),
-    ).toBeVisible();
+    await expect(page.getByText("runner-42")).toBeVisible();
+    await expect(page.getByText("Terminal", { exact: true })).toBeVisible();
     await expect(
       page.getByText("Created a new session, but the server did not return it as current."),
     ).toBeVisible();
-    await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry sync" })).toHaveCount(0);
     await expect(page.getByText("runner-43")).toHaveCount(0);
   });
 
