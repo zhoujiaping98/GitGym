@@ -289,6 +289,50 @@ func TestCurrentPracticeSessionReturnsStoredSession(t *testing.T) {
 	}
 }
 
+func TestCurrentPracticeSessionSurvivesRouterRebuildWhenStoreIsPersistent(t *testing.T) {
+	t.Parallel()
+
+	persistentStore := newPersistentStubStore("persistent-session-token", 42)
+	runnerClient := &stubRunnerClient{
+		workspace: runner.Workspace{
+			ID:       "ws-persistent",
+			Path:     "/tmp/ws-persistent",
+			Template: "standard",
+		},
+	}
+
+	routerA := httpx.NewRouter(httpx.Dependencies{
+		AuthStore:    persistentStore,
+		RunnerClient: runnerClient,
+	})
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":7,"template_id":1}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "persistent-session-token"})
+	createRec := httptest.NewRecorder()
+
+	routerA.ServeHTTP(createRec, createReq)
+
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 creating session, got %d with body %s", createRec.Code, createRec.Body.String())
+	}
+
+	routerB := httpx.NewRouter(httpx.Dependencies{
+		AuthStore:    persistentStore,
+		RunnerClient: runnerClient,
+	})
+
+	currentReq := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/current", nil)
+	currentReq.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "persistent-session-token"})
+	currentRec := httptest.NewRecorder()
+
+	routerB.ServeHTTP(currentRec, currentReq)
+
+	if currentRec.Code != http.StatusOK {
+		t.Fatalf("expected rebuilt router to recover current session, got %d with body %s", currentRec.Code, currentRec.Body.String())
+	}
+}
+
 func TestCreatePracticeSessionMapsErrors(t *testing.T) {
 	t.Parallel()
 
@@ -449,4 +493,28 @@ func authStoreWithSession(rawToken string, userID uint64) *stubUserStore {
 			},
 		},
 	}
+}
+
+type persistentStubStore struct {
+	*stubUserStore
+	practiceSessions *service.InMemoryPracticeSessionStore
+}
+
+func newPersistentStubStore(rawToken string, userID uint64) *persistentStubStore {
+	return &persistentStubStore{
+		stubUserStore: authStoreWithSession(rawToken, userID),
+		practiceSessions: service.NewInMemoryPracticeSessionStore(),
+	}
+}
+
+func (s *persistentStubStore) CreatePracticeSession(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error) {
+	return s.practiceSessions.CreatePracticeSession(ctx, session)
+}
+
+func (s *persistentStubStore) CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error) {
+	return s.practiceSessions.CurrentPracticeSession(ctx, userID)
+}
+
+func (s *persistentStubStore) PracticeSessionByID(ctx context.Context, sessionID uint64) (domain.PracticeSession, error) {
+	return s.practiceSessions.PracticeSessionByID(ctx, sessionID)
 }

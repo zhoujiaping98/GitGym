@@ -42,8 +42,12 @@ func NewRouter(deps ...Dependencies) http.Handler {
 		dependencies.RunnerClient = runner.NewClient(dependencies.AuthConfig.RunnerBaseURL, http.DefaultClient)
 	}
 	if dependencies.PracticeService == nil {
+		practiceStore := practiceSessionStoreFromDependencies(dependencies)
+		if practiceStore == nil {
+			practiceStore = service.NewInMemoryPracticeSessionStore()
+		}
 		dependencies.PracticeService = service.NewPracticeService(
-			service.NewInMemoryPracticeSessionStore(),
+			practiceStore,
 			dependencies.RunnerClient,
 			time.Now,
 		)
@@ -75,6 +79,19 @@ func NewRouter(deps ...Dependencies) http.Handler {
 		})
 	})
 	return r
+}
+
+func practiceSessionStoreFromDependencies(dependencies Dependencies) service.PracticeSessionStore {
+	if dependencies.AuthStore == nil {
+		return nil
+	}
+
+	practiceStore, ok := dependencies.AuthStore.(service.PracticeSessionStore)
+	if !ok {
+		return nil
+	}
+
+	return practiceStore
 }
 
 func defaultDependencies() Dependencies {

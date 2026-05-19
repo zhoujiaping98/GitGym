@@ -37,6 +37,56 @@ UPDATE user_sessions
 SET revoked_at = UTC_TIMESTAMP(6)
 WHERE session_token_hash = ? AND revoked_at IS NULL
 `
+	createPracticeSessionQuery = `
+INSERT INTO practice_sessions (
+  user_id,
+  scenario_id,
+  template_id,
+  runner_ref,
+  workspace_path_ref,
+  status,
+  started_at,
+  expires_at,
+  ended_at,
+  last_activity_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+	currentPracticeSessionQuery = `
+SELECT
+  id,
+  user_id,
+  scenario_id,
+  template_id,
+  runner_ref,
+  workspace_path_ref,
+  status,
+  started_at,
+  ended_at,
+  expires_at,
+  last_activity_at
+FROM practice_sessions
+WHERE user_id = ? AND status = 'active'
+ORDER BY started_at DESC, id DESC
+LIMIT 1
+`
+	practiceSessionByIDQuery = `
+SELECT
+  id,
+  user_id,
+  scenario_id,
+  template_id,
+  runner_ref,
+  workspace_path_ref,
+  status,
+  started_at,
+  ended_at,
+  expires_at,
+  last_activity_at
+FROM practice_sessions
+WHERE id = ?
+LIMIT 1
+`
 )
 
 type MySQLStore struct {
@@ -136,6 +186,44 @@ func (s *MySQLStore) RevokeBrowserSession(ctx context.Context, tokenHash string)
 	return nil
 }
 
+func (s *MySQLStore) CreatePracticeSession(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		createPracticeSessionQuery,
+		session.UserID,
+		session.ScenarioID,
+		session.TemplateID,
+		session.RunnerRef,
+		session.WorkspacePathRef,
+		session.Status,
+		session.StartedAt,
+		session.ExpiresAt,
+		session.EndedAt,
+		session.LastActivityAt,
+	)
+	if err != nil {
+		return domain.PracticeSession{}, fmt.Errorf("create practice session: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return domain.PracticeSession{}, fmt.Errorf("read practice session id: %w", err)
+	}
+
+	session.ID = uint64(id)
+	return session, nil
+}
+
+func (s *MySQLStore) CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error) {
+	row := s.db.QueryRowContext(ctx, currentPracticeSessionQuery, userID)
+	return scanPracticeSession(row)
+}
+
+func (s *MySQLStore) PracticeSessionByID(ctx context.Context, sessionID uint64) (domain.PracticeSession, error) {
+	row := s.db.QueryRowContext(ctx, practiceSessionByIDQuery, sessionID)
+	return scanPracticeSession(row)
+}
+
 func NormalizeMySQLDSN(dsn string) (string, error) {
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
@@ -208,4 +296,33 @@ func mapBrowserSessionLookupError(err error) error {
 		return service.ErrBrowserSessionNotFound
 	}
 	return fmt.Errorf("get browser session by token hash: %w", err)
+}
+
+func scanPracticeSession(row *sql.Row) (domain.PracticeSession, error) {
+	var (
+		session domain.PracticeSession
+		endedAt sql.NullTime
+	)
+
+	if err := row.Scan(
+		&session.ID,
+		&session.UserID,
+		&session.ScenarioID,
+		&session.TemplateID,
+		&session.RunnerRef,
+		&session.WorkspacePathRef,
+		&session.Status,
+		&session.StartedAt,
+		&endedAt,
+		&session.ExpiresAt,
+		&session.LastActivityAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return domain.PracticeSession{}, service.ErrPracticeSessionNotFound
+		}
+		return domain.PracticeSession{}, fmt.Errorf("scan practice session: %w", err)
+	}
+
+	session.EndedAt = nullTimePtr(endedAt)
+	return session, nil
 }
