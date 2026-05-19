@@ -85,7 +85,7 @@ vi.mock("@xterm/xterm", () => ({
 const activeSession = {
   id: 42,
   userId: 7,
-  scenarioId: 9,
+  scenarioId: 1,
   templateId: 1,
   runnerRef: "runner-42",
   workspacePath: "/tmp/gitgym/session-42",
@@ -98,7 +98,7 @@ const activeSession = {
 const nextSession = {
   id: 43,
   userId: 7,
-  scenarioId: 9,
+  scenarioId: 1,
   templateId: 1,
   runnerRef: "runner-43",
   workspacePath: "/tmp/gitgym/session-43",
@@ -111,7 +111,7 @@ const nextSession = {
 const mismatchedSession = {
   id: 99,
   userId: 7,
-  scenarioId: 9,
+  scenarioId: 1,
   templateId: 1,
   runnerRef: "runner-99",
   workspacePath: "/tmp/gitgym/session-99",
@@ -240,7 +240,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(mockCreatePracticeSession).toHaveBeenCalledWith({
-        scenarioId: 9,
+        scenarioId: 1,
         templateId: 1,
       });
     });
@@ -370,7 +370,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(mockCreatePracticeSession).toHaveBeenCalledWith({
-        scenarioId: 9,
+        scenarioId: 1,
         templateId: 1,
       });
     });
@@ -467,6 +467,30 @@ describe("App", () => {
 
     expect(reconnect).toHaveBeenCalledTimes(1);
     expect(mockResetPracticeSession).not.toHaveBeenCalled();
+  });
+
+  it("does not render the terminal empty-state copy while the live shell is ready", () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        transcript: [],
+      }),
+    );
+
+    render(<App />);
+
+    expect(
+      screen.queryByText("Terminal output has not arrived yet."),
+    ).not.toBeInTheDocument();
   });
 
   it("reverts the optimistic new session and shows an error when refresh fails", async () => {

@@ -112,6 +112,14 @@ export function TerminalPanel({
   }, [preview, sessionKey]);
 
   useEffect(() => {
+    if (preview || terminal.status !== "ready") {
+      return;
+    }
+
+    terminalRef.current?.focus();
+  }, [preview, terminal.status]);
+
+  useEffect(() => {
     if (preview) {
       return;
     }
@@ -135,6 +143,8 @@ export function TerminalPanel({
 
   const showReconnect =
     !preview && terminal.terminalUrl && terminal.status === "unavailable";
+  const showEmptyState =
+    !preview && terminal.transcript.length === 0 && terminal.status !== "ready";
   const emptyMessage = terminal.error
     ? terminal.error
     : terminal.status === "connecting"
@@ -159,11 +169,15 @@ export function TerminalPanel({
         ) : (
           <div
             data-testid="live-terminal"
+            className="terminal-host"
+            onMouseDown={() => {
+              terminalRef.current?.focus();
+            }}
             ref={containerRef}
             style={{ minHeight: "100%", width: "100%" }}
           />
         )}
-        {!preview && terminal.transcript.length === 0 ? (
+        {showEmptyState ? (
           <p className="terminal-empty">{emptyMessage}</p>
         ) : null}
       </div>
