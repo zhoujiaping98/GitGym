@@ -152,7 +152,7 @@ func statusForCreatePracticeSessionError(err error) int {
 
 func statusForPracticeSessionMutationError(err error) int {
 	switch {
-	case errors.Is(err, service.ErrInvalidPracticeSessionInput), errors.Is(err, service.ErrUnknownPracticeTemplate):
+	case errors.Is(err, service.ErrInvalidPracticeSessionInput), errors.Is(err, service.ErrUnknownPracticeScenario), errors.Is(err, service.ErrUnknownPracticeTemplate):
 		return http.StatusBadRequest
 	case errors.Is(err, service.ErrPracticeSessionNotFound):
 		return http.StatusNotFound

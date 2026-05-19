@@ -7,7 +7,7 @@ import type { PracticeSession } from "../types";
 const activeSession: PracticeSession = {
   id: 42,
   userId: 7,
-  scenarioId: 9,
+  scenarioId: 1,
   templateId: 1,
   runnerRef: "runner-42",
   workspacePath: "/tmp/gitgym/session-42",

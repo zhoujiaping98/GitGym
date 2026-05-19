@@ -33,6 +33,31 @@ function statusLabel(status: TerminalSessionState["status"]) {
   }
 }
 
+function isTransientFitDimensionsError(error: unknown) {
+  return (
+    error instanceof TypeError &&
+    error.message.includes("undefined") &&
+    error.message.includes("dimensions")
+  );
+}
+
+function writePendingTranscript(
+  terminalInstance: Terminal,
+  transcript: string[],
+  lastWrittenIndexRef: { current: number },
+) {
+  if (transcript.length < lastWrittenIndexRef.current) {
+    (terminalInstance as Terminal & { reset?: () => void }).reset?.();
+    lastWrittenIndexRef.current = 0;
+  }
+
+  const nextChunks = transcript.slice(lastWrittenIndexRef.current);
+  for (const chunk of nextChunks) {
+    terminalInstance.write(chunk);
+  }
+  lastWrittenIndexRef.current = transcript.length;
+}
+
 export function TerminalPanel({
   preview = false,
   sessionKey = null,
@@ -58,56 +83,104 @@ export function TerminalPanel({
       return;
     }
 
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
+    let fitFrame: number | null = null;
+    let initTimer: ReturnType<typeof setTimeout> | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    let terminalInstance: Terminal | null = null;
+    let dataSubscription: { dispose: () => void } | null = null;
+    let resizeSubscription: { dispose: () => void } | null = null;
 
-    const terminalInstance = new Terminal({
-      convertEol: true,
-      cursorBlink: true,
-      fontFamily: '"Consolas", "SFMono-Regular", "Liberation Mono", monospace',
-      fontSize: 13,
-      theme: {
-        background: "#050e19",
-        foreground: "#bbffd6",
-        cursor: "#79ffb1",
-      },
-    });
-    const fitAddon = new FitAddon();
+    const scheduleFit = (fitAddon: FitAddon) => {
+      if (typeof requestAnimationFrame !== "function") {
+        fitTerminal(fitAddon);
+        return;
+      }
 
-    terminalRef.current = terminalInstance;
-    terminalInstance.loadAddon(fitAddon);
-    terminalInstance.open(container);
-    terminalInstance.focus();
+      if (fitFrame !== null) {
+        return;
+      }
 
-    const dataSubscription = terminalInstance.onData((data) => {
-      sendInputRef.current(data);
-    });
-    const resizeSubscription = terminalInstance.onResize(({ cols, rows }) => {
-      resizeHandlerRef.current(cols, rows);
-    });
+      fitFrame = requestAnimationFrame(() => {
+        fitFrame = null;
+        fitTerminal(fitAddon);
+      });
+    };
 
-    fitAddon.fit();
+    const fitTerminal = (fitAddon: FitAddon) => {
+      try {
+        fitAddon.fit();
+      } catch (error) {
+        if (isTransientFitDimensionsError(error)) {
+          scheduleFit(fitAddon);
+          return;
+        }
+        throw error;
+      }
+    };
 
-    const resizeObserver =
-      typeof ResizeObserver === "undefined"
-        ? null
-        : new ResizeObserver(() => {
-            fitAddon.fit();
-          });
+    const initializeTerminal = () => {
+      initTimer = null;
 
-    resizeObserver?.observe(container);
+      const container = containerRef.current;
+      if (!container) {
+        return;
+      }
+
+      terminalInstance = new Terminal({
+        convertEol: true,
+        cursorBlink: true,
+        fontFamily: '"Consolas", "SFMono-Regular", "Liberation Mono", monospace',
+        fontSize: 13,
+        theme: {
+          background: "#050e19",
+          foreground: "#bbffd6",
+          cursor: "#79ffb1",
+        },
+      });
+      const fitAddon = new FitAddon();
+
+      terminalRef.current = terminalInstance;
+      terminalInstance.loadAddon(fitAddon);
+      terminalInstance.open(container);
+      terminalInstance.focus();
+
+      dataSubscription = terminalInstance.onData((data) => {
+        sendInputRef.current(data);
+      });
+      resizeSubscription = terminalInstance.onResize(({ cols, rows }) => {
+        resizeHandlerRef.current(cols, rows);
+      });
+
+      fitTerminal(fitAddon);
+
+      resizeObserver =
+        typeof ResizeObserver === "undefined"
+          ? null
+          : new ResizeObserver(() => {
+              scheduleFit(fitAddon);
+            });
+
+      resizeObserver?.observe(container);
+      writePendingTranscript(terminalInstance, terminal.transcript, lastWrittenIndexRef);
+    };
+
+    initTimer = setTimeout(initializeTerminal, 0);
 
     return () => {
+      if (initTimer !== null) {
+        clearTimeout(initTimer);
+      }
+      if (fitFrame !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(fitFrame);
+      }
       resizeObserver?.disconnect();
-      dataSubscription.dispose();
-      resizeSubscription.dispose();
+      dataSubscription?.dispose();
+      resizeSubscription?.dispose();
       lastWrittenIndexRef.current = 0;
       if (terminalRef.current === terminalInstance) {
         terminalRef.current = null;
       }
-      terminalInstance.dispose();
+      terminalInstance?.dispose();
     };
   }, [preview, sessionKey]);
 
@@ -128,17 +201,7 @@ export function TerminalPanel({
     if (!terminalInstance) {
       return;
     }
-
-    if (terminal.transcript.length < lastWrittenIndexRef.current) {
-      (terminalInstance as Terminal & { reset?: () => void }).reset?.();
-      lastWrittenIndexRef.current = 0;
-    }
-
-    const nextChunks = terminal.transcript.slice(lastWrittenIndexRef.current);
-    for (const chunk of nextChunks) {
-      terminalInstance.write(chunk);
-    }
-    lastWrittenIndexRef.current = terminal.transcript.length;
+    writePendingTranscript(terminalInstance, terminal.transcript, lastWrittenIndexRef);
   }, [preview, terminal.transcript]);
 
   const showReconnect =

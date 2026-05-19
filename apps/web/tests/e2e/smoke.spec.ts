@@ -5,7 +5,7 @@ test.describe("GitGym shell", () => {
     session: {
       id: 42,
       user_id: 7,
-      scenario_id: 9,
+      scenario_id: 1,
       template_id: 1,
       runner_ref: "runner-42",
       workspace_path: "/tmp/gitgym/session-42",
@@ -63,7 +63,7 @@ test.describe("GitGym shell", () => {
                 session: {
                   id: 43,
                   user_id: 7,
-                  scenario_id: 9,
+                  scenario_id: 1,
                   template_id: 1,
                   runner_ref: "runner-43",
                   workspace_path: "/tmp/gitgym/session-43",
@@ -90,7 +90,7 @@ test.describe("GitGym shell", () => {
           session: {
             id: 43,
             user_id: 7,
-            scenario_id: 9,
+            scenario_id: 1,
             template_id: 1,
             runner_ref: "runner-43",
             workspace_path: "/tmp/gitgym/session-43",
@@ -204,7 +204,7 @@ test.describe("GitGym shell", () => {
           session: {
             id: 43,
             user_id: 7,
-            scenario_id: 9,
+            scenario_id: 1,
             template_id: 1,
             runner_ref: "runner-43",
             workspace_path: "/tmp/gitgym/session-43",
@@ -269,7 +269,7 @@ test.describe("GitGym shell", () => {
           session: {
             id: 43,
             user_id: 7,
-            scenario_id: 9,
+            scenario_id: 1,
             template_id: 1,
             runner_ref: "runner-43",
             workspace_path: "/tmp/gitgym/session-43",

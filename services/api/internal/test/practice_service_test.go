@@ -28,7 +28,7 @@ func TestPracticeServiceCreatesSessionFromRunnerWorkspace(t *testing.T) {
 
 	session, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 		UserID:     42,
-		ScenarioID: 7,
+		ScenarioID: 1,
 		TemplateID: 1,
 	})
 	if err != nil {
@@ -47,8 +47,8 @@ func TestPracticeServiceCreatesSessionFromRunnerWorkspace(t *testing.T) {
 	if store.lastSession.UserID != 42 {
 		t.Fatalf("expected user ID 42, got %d", store.lastSession.UserID)
 	}
-	if store.lastSession.ScenarioID != 7 {
-		t.Fatalf("expected scenario ID 7, got %d", store.lastSession.ScenarioID)
+	if store.lastSession.ScenarioID != 1 {
+		t.Fatalf("expected scenario ID 1, got %d", store.lastSession.ScenarioID)
 	}
 	if store.lastSession.TemplateID != 1 {
 		t.Fatalf("expected template ID 1, got %d", store.lastSession.TemplateID)
@@ -95,7 +95,7 @@ func TestPracticeServiceClassifiesCreateSessionErrors(t *testing.T) {
 
 		_, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 			UserID:     42,
-			ScenarioID: 7,
+			ScenarioID: 1,
 			TemplateID: 999,
 		})
 
@@ -104,12 +104,26 @@ func TestPracticeServiceClassifiesCreateSessionErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects unknown scenario", func(t *testing.T) {
+		svc := service.NewPracticeService(&stubPracticeSessionStore{}, &stubRunnerClient{}, time.Now)
+
+		_, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+			UserID:     42,
+			ScenarioID: 9,
+			TemplateID: 1,
+		})
+
+		if !errors.Is(err, service.ErrUnknownPracticeScenario) {
+			t.Fatalf("expected unknown scenario error, got %v", err)
+		}
+	})
+
 	t.Run("reports missing configuration", func(t *testing.T) {
 		svc := service.NewPracticeService(nil, &stubRunnerClient{}, time.Now)
 
 		_, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 			UserID:     42,
-			ScenarioID: 7,
+			ScenarioID: 1,
 			TemplateID: 1,
 		})
 
@@ -123,7 +137,7 @@ func TestPracticeServiceClassifiesCreateSessionErrors(t *testing.T) {
 
 		_, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 			UserID:     42,
-			ScenarioID: 7,
+			ScenarioID: 1,
 			TemplateID: 1,
 		})
 
@@ -139,7 +153,7 @@ func TestPracticeServiceClassifiesCreateSessionErrors(t *testing.T) {
 
 		_, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 			UserID:     42,
-			ScenarioID: 7,
+			ScenarioID: 1,
 			TemplateID: 1,
 		})
 
@@ -163,7 +177,7 @@ func TestPracticeServiceReturnsCurrentSessionForUser(t *testing.T) {
 
 	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 		UserID:     42,
-		ScenarioID: 7,
+		ScenarioID: 1,
 		TemplateID: 1,
 	})
 	if err != nil {
@@ -193,7 +207,7 @@ func TestPracticeServiceFindsSessionByIDForOwningUser(t *testing.T) {
 
 	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 		UserID:     42,
-		ScenarioID: 7,
+		ScenarioID: 1,
 		TemplateID: 1,
 	})
 	if err != nil {
@@ -228,7 +242,7 @@ func TestPracticeServiceResetsOwnedSessionWorkspace(t *testing.T) {
 
 	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 		UserID:     42,
-		ScenarioID: 7,
+		ScenarioID: 1,
 		TemplateID: 1,
 	})
 	if err != nil {
@@ -278,7 +292,7 @@ func TestPracticeServiceClassifiesResetSessionErrors(t *testing.T) {
 
 		created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 			UserID:     42,
-			ScenarioID: 7,
+			ScenarioID: 1,
 			TemplateID: 1,
 		})
 		if err != nil {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"gitgym/services/api/internal/config"
 	httpx "gitgym/services/api/internal/http"
 	"gitgym/services/api/internal/runner"
 	"gitgym/services/api/internal/service"
@@ -34,7 +35,7 @@ func TestPracticeTerminalWebSocketRejectsForeignSession(t *testing.T) {
 
 	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 		UserID:     99,
-		ScenarioID: 7,
+		ScenarioID: 1,
 		TemplateID: 1,
 	})
 	if err != nil {
@@ -101,7 +102,7 @@ func TestPracticeTerminalWebSocketBridgesRunnerOutput(t *testing.T) {
 
 	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 		UserID:     42,
-		ScenarioID: 7,
+		ScenarioID: 1,
 		TemplateID: 1,
 	})
 	if err != nil {
@@ -127,6 +128,83 @@ func TestPracticeTerminalWebSocketBridgesRunnerOutput(t *testing.T) {
 	}
 	if string(payload) != "runner-output\r\n" {
 		t.Fatalf("expected bridged runner output %q, got %q", "runner-output\r\n", string(payload))
+	}
+}
+
+func TestPracticeTerminalWebSocketAllowsConfiguredFrontendOrigin(t *testing.T) {
+	t.Parallel()
+
+	runnerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/workspaces/ws-origin/terminal" {
+			http.NotFound(w, r)
+			return
+		}
+
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+
+		if err := conn.Write(r.Context(), websocket.MessageText, []byte("origin-ok\r\n")); err != nil {
+			t.Errorf("write runner output: %v", err)
+		}
+	}))
+	defer runnerServer.Close()
+
+	practiceService := service.NewPracticeService(
+		service.NewInMemoryPracticeSessionStore(),
+		&stubRunnerClient{
+			workspace: runner.Workspace{
+				ID:       "ws-origin",
+				Path:     "/tmp/ws-origin",
+				Template: "standard",
+			},
+		},
+		func() time.Time {
+			return time.Date(2026, 5, 19, 8, 20, 0, 0, time.UTC)
+		},
+	)
+
+	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 1,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	apiServer := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
+		PracticeService: practiceService,
+		AuthStore:       authStoreWithSession("origin-token", 42),
+		RunnerClient:    runner.NewClient(runnerServer.URL, http.DefaultClient),
+		AuthConfig: config.Config{
+			FrontendRedirectURL: "http://127.0.0.1:5173",
+		},
+	}))
+	defer apiServer.Close()
+
+	headers := practiceTerminalHeaders("origin-token")
+	headers.Set("Origin", "http://127.0.0.1:5173")
+
+	ctx, cancel := testTimeoutContext(t)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, practiceTerminalURL(apiServer.URL, session.ID), &websocket.DialOptions{
+		HTTPHeader: headers,
+	})
+	if err != nil {
+		t.Fatalf("dial websocket with configured frontend origin: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	_, payload, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read bridged runner output: %v", err)
+	}
+	if string(payload) != "origin-ok\r\n" {
+		t.Fatalf("expected bridged runner output %q, got %q", "origin-ok\r\n", string(payload))
 	}
 }
 
@@ -173,7 +251,7 @@ func TestPracticeTerminalWebSocketBridgesRunnerCommandCompletionFrames(t *testin
 
 	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 		UserID:     42,
-		ScenarioID: 7,
+		ScenarioID: 1,
 		TemplateID: 1,
 	})
 	if err != nil {
@@ -252,7 +330,7 @@ func TestPracticeTerminalWebSocketForwardsBrowserInput(t *testing.T) {
 
 	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 		UserID:     42,
-		ScenarioID: 7,
+		ScenarioID: 1,
 		TemplateID: 1,
 	})
 	if err != nil {
@@ -305,7 +383,7 @@ func TestPracticeTerminalWebSocketPreservesRunnerCloseStatus(t *testing.T) {
 
 	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 		UserID:     42,
-		ScenarioID: 7,
+		ScenarioID: 1,
 		TemplateID: 1,
 	})
 	if err != nil {

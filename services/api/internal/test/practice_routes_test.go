@@ -34,7 +34,7 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 		}{
 			{name: "list templates", method: http.MethodGet, target: "/api/v1/templates", status: http.StatusOK},
 			{name: "current session", method: http.MethodGet, target: "/api/v1/practice-sessions/current", status: http.StatusNotFound},
-			{name: "create session", method: http.MethodPost, target: "/api/v1/practice-sessions", body: []byte(`{"scenario_id":7,"template_id":1}`), status: http.StatusCreated},
+			{name: "create session", method: http.MethodPost, target: "/api/v1/practice-sessions", body: []byte(`{"scenario_id":1,"template_id":1}`), status: http.StatusCreated},
 			{name: "reset session", method: http.MethodPost, target: "/api/v1/practice-sessions/123/reset", status: http.StatusAccepted},
 			{name: "terminal route", method: http.MethodGet, target: "/api/v1/practice-sessions/123/terminal", status: http.StatusNotFound},
 		}
@@ -58,7 +58,7 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 	})
 
 	t.Run("create session remains protected without cookie", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":7,"template_id":1}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1,"template_id":1}`))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 
@@ -83,7 +83,7 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 	t.Run("dev auth bypass allows local requests without cookie", func(t *testing.T) {
 		t.Setenv("DEV_AUTH_BYPASS", "true")
 
-		createReq := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":7,"template_id":1}`))
+		createReq := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1,"template_id":1}`))
 		createReq.Header.Set("Content-Type", "application/json")
 		createReq.RemoteAddr = "127.0.0.1:45678"
 		createRec := httptest.NewRecorder()
@@ -179,7 +179,7 @@ func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testi
 		AuthStore:       authStoreWithSession("user-42-session-token", 42),
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"user_id":999,"scenario_id":7,"template_id":1}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"user_id":999,"scenario_id":1,"template_id":1}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "user-42-session-token"})
 	rec := httptest.NewRecorder()
@@ -192,8 +192,8 @@ func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testi
 	if recordingService.lastCreateInput.UserID != 42 {
 		t.Fatalf("expected handler to use persisted authenticated user ID 42, got %d", recordingService.lastCreateInput.UserID)
 	}
-	if recordingService.lastCreateInput.ScenarioID != 7 {
-		t.Fatalf("expected scenario ID 7, got %d", recordingService.lastCreateInput.ScenarioID)
+	if recordingService.lastCreateInput.ScenarioID != 1 {
+		t.Fatalf("expected scenario ID 1, got %d", recordingService.lastCreateInput.ScenarioID)
 	}
 	if recordingService.lastCreateInput.TemplateID != 1 {
 		t.Fatalf("expected template ID 1, got %d", recordingService.lastCreateInput.TemplateID)
@@ -246,7 +246,7 @@ func TestCurrentPracticeSessionReturnsStoredSession(t *testing.T) {
 
 	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
 		UserID:     42,
-		ScenarioID: 7,
+		ScenarioID: 1,
 		TemplateID: 1,
 	})
 	if err != nil {
@@ -306,7 +306,7 @@ func TestCurrentPracticeSessionSurvivesRouterRebuildWhenStoreIsPersistent(t *tes
 		RunnerClient: runnerClient,
 	})
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":7,"template_id":1}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1,"template_id":1}`))
 	createReq.Header.Set("Content-Type", "application/json")
 	createReq.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "persistent-session-token"})
 	createRec := httptest.NewRecorder()
@@ -342,6 +342,7 @@ func TestCreatePracticeSessionMapsErrors(t *testing.T) {
 		status int
 	}{
 		{name: "bad input", err: service.ErrInvalidPracticeSessionInput, status: http.StatusBadRequest},
+		{name: "unknown scenario", err: service.ErrUnknownPracticeScenario, status: http.StatusBadRequest},
 		{name: "unknown template", err: service.ErrUnknownPracticeTemplate, status: http.StatusBadRequest},
 		{name: "service configuration", err: service.ErrPracticeServiceConfiguration, status: http.StatusInternalServerError},
 		{name: "runner creation failure", err: service.ErrRunnerWorkspaceCreation, status: http.StatusBadGateway},
@@ -359,7 +360,7 @@ func TestCreatePracticeSessionMapsErrors(t *testing.T) {
 				AuthStore: authStoreWithSession("create-error-token", 42),
 			})
 
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":7,"template_id":1}`))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1,"template_id":1}`))
 			req.Header.Set("Content-Type", "application/json")
 			req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "create-error-token"})
 			rec := httptest.NewRecorder()

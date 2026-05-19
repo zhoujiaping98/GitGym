@@ -58,31 +58,33 @@ func main() {
 			continue
 		}
 
-		existingCount, err := countExistingTables(db, []string{
-			"users",
-			"auth_accounts",
-			"user_sessions",
-			"workspace_templates",
-			"scenarios",
-			"practice_sessions",
-			"command_runs",
-			"repo_snapshots",
-			"session_events",
-			"session_resets",
-		})
-		if err != nil {
-			log.Fatalf("inspect existing tables for %s: %v", migrationPath, err)
-		}
+		if shouldCheckInitialSchemaBaseline(migrationPath) {
+			existingCount, err := countExistingTables(db, []string{
+				"users",
+				"auth_accounts",
+				"user_sessions",
+				"workspace_templates",
+				"scenarios",
+				"practice_sessions",
+				"command_runs",
+				"repo_snapshots",
+				"session_events",
+				"session_resets",
+			})
+			if err != nil {
+				log.Fatalf("inspect existing tables for %s: %v", migrationPath, err)
+			}
 
-		if existingCount > 0 {
-			if existingCount != 10 {
-				log.Fatalf("migration %s is not recorded, but only %d/10 expected tables exist; refusing to continue", migrationPath, existingCount)
+			if existingCount > 0 {
+				if existingCount != 10 {
+					log.Fatalf("migration %s is not recorded, but only %d/10 expected tables exist; refusing to continue", migrationPath, existingCount)
+				}
+				if err := recordMigration(db, migrationPath); err != nil {
+					log.Fatalf("record baseline migration %s: %v", migrationPath, err)
+				}
+				fmt.Printf("recorded %s as already present\n", migrationPath)
+				continue
 			}
-			if err := recordMigration(db, migrationPath); err != nil {
-				log.Fatalf("record baseline migration %s: %v", migrationPath, err)
-			}
-			fmt.Printf("recorded %s as already present\n", migrationPath)
-			continue
 		}
 
 		contents, err := os.ReadFile(migrationPath)
@@ -101,6 +103,10 @@ func main() {
 		}
 		fmt.Printf("applied %s\n", migrationPath)
 	}
+}
+
+func shouldCheckInitialSchemaBaseline(migrationPath string) bool {
+	return filepath.Base(migrationPath) == "0001_initial.sql"
 }
 
 func ensureMigrationTable(db *sql.DB) error {

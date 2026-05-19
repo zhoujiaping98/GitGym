@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"gitgym/services/api/internal/http/middleware"
 	"gitgym/services/api/internal/runner"
@@ -13,7 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func PracticeTerminalWebsocket(practiceService service.PracticeService, runnerClient runner.Client) http.HandlerFunc {
+func PracticeTerminalWebsocket(practiceService service.PracticeService, runnerClient runner.Client, frontendRedirectURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authenticatedSession, ok := middleware.AuthenticatedSessionFromContext(r.Context())
 		if !ok || authenticatedSession.UserID == 0 {
@@ -45,7 +47,7 @@ func PracticeTerminalWebsocket(practiceService service.PracticeService, runnerCl
 			return
 		}
 
-		browserSocket, err := websocket.Accept(w, r, nil)
+		browserSocket, err := websocket.Accept(w, r, terminalAcceptOptions(frontendRedirectURL))
 		if err != nil {
 			return
 		}
@@ -79,6 +81,26 @@ func PracticeTerminalWebsocket(practiceService service.PracticeService, runnerCl
 		_ = browserConn.Close(closeStatus, closeReason)
 		cancel()
 	}
+}
+
+func terminalAcceptOptions(frontendRedirectURL string) *websocket.AcceptOptions {
+	originPattern := terminalOriginPattern(frontendRedirectURL)
+	if originPattern == "" {
+		return nil
+	}
+
+	return &websocket.AcceptOptions{
+		OriginPatterns: []string{originPattern},
+	}
+}
+
+func terminalOriginPattern(frontendRedirectURL string) string {
+	parsedURL, err := url.Parse(strings.TrimSpace(frontendRedirectURL))
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(parsedURL.Host)
 }
 
 func proxyTerminalFrames(ctx context.Context, src runner.TerminalConnection, dst runner.TerminalConnection) error {

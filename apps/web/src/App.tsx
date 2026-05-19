@@ -15,7 +15,7 @@ function templateLabel(templateId: number | null) {
   return templateId ? `Template #${templateId}` : "Template: Standard";
 }
 
-const defaultSandboxScenarioId = 9;
+const defaultSandboxScenarioId = 1;
 const defaultSandboxTemplateId = 1;
 
 type ActionErrorState = {

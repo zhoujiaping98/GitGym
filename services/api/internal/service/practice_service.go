@@ -15,6 +15,7 @@ const practiceSessionTTL = 2 * time.Hour
 
 var (
 	ErrInvalidPracticeSessionInput  = errors.New("invalid practice session input")
+	ErrUnknownPracticeScenario      = errors.New("unknown practice scenario")
 	ErrUnknownPracticeTemplate      = errors.New("unknown practice template")
 	ErrPracticeServiceConfiguration = errors.New("practice service configuration error")
 	ErrRunnerWorkspaceCreation      = errors.New("runner workspace creation failed")
@@ -26,6 +27,13 @@ type PracticeTemplate struct {
 	ID   uint64 `json:"id"`
 	Key  string `json:"key"`
 	Name string `json:"name"`
+}
+
+type PracticeScenario struct {
+	ID         uint64
+	Key        string
+	Name       string
+	TemplateID uint64
 }
 
 type CreatePracticeSessionInput struct {
@@ -53,6 +61,7 @@ type practiceService struct {
 	runner    runner.Client
 	now       func() time.Time
 	templates []PracticeTemplate
+	scenarios []PracticeScenario
 }
 
 func NewPracticeService(store PracticeSessionStore, runnerClient runner.Client, now func() time.Time) PracticeService {
@@ -67,6 +76,9 @@ func NewPracticeService(store PracticeSessionStore, runnerClient runner.Client, 
 		templates: []PracticeTemplate{
 			{ID: 1, Key: "standard", Name: "Standard"},
 		},
+		scenarios: []PracticeScenario{
+			{ID: 1, Key: "sandbox-standard", Name: "Standard Sandbox", TemplateID: 1},
+		},
 	}
 }
 
@@ -79,6 +91,10 @@ func (s *practiceService) ListTemplates(_ context.Context) []PracticeTemplate {
 func (s *practiceService) CreatePracticeSession(ctx context.Context, input CreatePracticeSessionInput) (domain.PracticeSession, error) {
 	if input.UserID == 0 || input.ScenarioID == 0 || input.TemplateID == 0 {
 		return domain.PracticeSession{}, fmt.Errorf("%w", ErrInvalidPracticeSessionInput)
+	}
+
+	if _, ok := s.scenarioByID(input.ScenarioID); !ok {
+		return domain.PracticeSession{}, fmt.Errorf("%w: %d", ErrUnknownPracticeScenario, input.ScenarioID)
 	}
 
 	template, ok := s.templateByID(input.TemplateID)
@@ -187,6 +203,15 @@ func (s *practiceService) templateByID(templateID uint64) (PracticeTemplate, boo
 		}
 	}
 	return PracticeTemplate{}, false
+}
+
+func (s *practiceService) scenarioByID(scenarioID uint64) (PracticeScenario, bool) {
+	for _, scenario := range s.scenarios {
+		if scenario.ID == scenarioID {
+			return scenario, true
+		}
+	}
+	return PracticeScenario{}, false
 }
 
 type InMemoryPracticeSessionStore struct {

@@ -1,3 +1,4 @@
+import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
@@ -22,12 +23,16 @@ const mockTerminalOnResize = vi.fn();
 const mockTerminalInstances: Array<{ options?: unknown }> = [];
 const mockResizeObserverObserve = vi.fn();
 const mockResizeObserverDisconnect = vi.fn();
+const mockRequestAnimationFrame = vi.fn();
+const mockCancelAnimationFrame = vi.fn();
 
 let currentTerminalDataHandler: ((data: string) => void) | null = null;
 let currentTerminalResizeHandler:
   | ((payload: { cols: number; rows: number }) => void)
   | null = null;
 let currentResizeObserverCallback: (() => void) | null = null;
+let scheduledAnimationFrameCallback: FrameRequestCallback | null = null;
+let nextAnimationFrameHandle = 1;
 
 vi.mock("../hooks/useCurrentSession", () => ({
   useCurrentSession: () => mockUseCurrentSession(),
@@ -149,6 +154,12 @@ function triggerTerminalContainerResize() {
   currentResizeObserverCallback?.();
 }
 
+function flushAnimationFrame(timestamp = 16) {
+  const callback = scheduledAnimationFrameCallback;
+  scheduledAnimationFrameCallback = null;
+  callback?.(timestamp);
+}
+
 beforeEach(() => {
   mockUseCurrentSession.mockReset();
   mockUseTerminalSession.mockReset();
@@ -164,10 +175,14 @@ beforeEach(() => {
   mockTerminalOnResize.mockReset();
   mockResizeObserverObserve.mockReset();
   mockResizeObserverDisconnect.mockReset();
+  mockRequestAnimationFrame.mockReset();
+  mockCancelAnimationFrame.mockReset();
   mockTerminalInstances.length = 0;
   currentTerminalDataHandler = null;
   currentTerminalResizeHandler = null;
   currentResizeObserverCallback = null;
+  scheduledAnimationFrameCallback = null;
+  nextAnimationFrameHandle = 1;
 
   class MockResizeObserver {
     constructor(callback: () => void) {
@@ -179,6 +194,14 @@ beforeEach(() => {
   }
 
   vi.stubGlobal("ResizeObserver", MockResizeObserver);
+  vi.stubGlobal(
+    "requestAnimationFrame",
+    mockRequestAnimationFrame.mockImplementation((callback: FrameRequestCallback) => {
+      scheduledAnimationFrameCallback = callback;
+      return nextAnimationFrameHandle++;
+    }),
+  );
+  vi.stubGlobal("cancelAnimationFrame", mockCancelAnimationFrame);
 
   mockUseCurrentSession.mockReturnValue({
     status: "ready",
@@ -419,6 +442,10 @@ describe("App", () => {
 
     render(<App />);
 
+    await waitFor(() => {
+      expect(mockTerminalOpen).toHaveBeenCalledTimes(1);
+    });
+
     fireEvent.click(screen.getByRole("button", { name: "Logout" }));
 
     expect(mockLogout).toHaveBeenCalledTimes(1);
@@ -436,7 +463,9 @@ describe("App", () => {
         screen.getByRole("link", { name: "Continue with GitHub" }),
       ).toBeInTheDocument();
     });
-    expect(mockTerminalDispose).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(mockTerminalDispose).toHaveBeenCalledTimes(1);
+    });
     expect(screen.getByText("Signed out")).toBeInTheDocument();
     expect(screen.queryByText("runner-42")).not.toBeInTheDocument();
   });
@@ -719,6 +748,11 @@ describe("App", () => {
 
     triggerTerminalContainerResize();
 
+    expect(mockFitAddonFit).toHaveBeenCalledTimes(initialFitCalls);
+    expect(mockRequestAnimationFrame).toHaveBeenCalledTimes(1);
+
+    flushAnimationFrame();
+
     expect(mockFitAddonFit).toHaveBeenCalledTimes(initialFitCalls + 1);
     expect(resize).not.toHaveBeenCalled();
 
@@ -726,6 +760,40 @@ describe("App", () => {
 
     expect(resize).toHaveBeenCalledTimes(1);
     expect(resize).toHaveBeenCalledWith(120, 40);
+  });
+
+  it("retries terminal fitting on the next animation frame when xterm dimensions are not ready", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFitAddonFit
+      .mockImplementationOnce(() => {
+        throw new TypeError("Cannot read properties of undefined (reading 'dimensions')");
+      })
+      .mockImplementation(() => undefined);
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(mockRequestAnimationFrame).toHaveBeenCalledTimes(1);
+    });
+
+    flushAnimationFrame();
+
+    expect(mockFitAddonFit).toHaveBeenCalledTimes(2);
+    expect(mockTerminalOpen).toHaveBeenCalledTimes(1);
   });
 
   it("shows reconnect only when the live terminal transport is unavailable", () => {
@@ -834,5 +902,41 @@ describe("App", () => {
 
     expect(firstMount).toBe(secondMount);
     expect(mockTerminalInstances).toHaveLength(1);
+  });
+
+  it("defers xterm initialization until the strict-mode effect replay settles", async () => {
+    vi.useFakeTimers();
+
+    try {
+      mockUseCurrentSession.mockReturnValue({
+        status: "ready",
+        session: activeSession,
+        absenceReason: null,
+        error: null,
+        refresh: vi.fn().mockResolvedValue(activeSession),
+      });
+
+      mockUseTerminalSession.mockReturnValue(
+        createTerminalState({
+          status: "ready",
+          terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        }),
+      );
+
+      render(
+        <React.StrictMode>
+          <App />
+        </React.StrictMode>,
+      );
+
+      expect(mockTerminalInstances).toHaveLength(0);
+
+      vi.runOnlyPendingTimers();
+      await Promise.resolve();
+
+      expect(mockTerminalInstances).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
