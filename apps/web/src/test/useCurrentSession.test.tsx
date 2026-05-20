@@ -24,6 +24,24 @@ beforeEach(() => {
 });
 
 describe("useCurrentSession", () => {
+  it("surfaces orphaned current sessions as a recoverable absence state", async () => {
+    mockFetchCurrentSession.mockResolvedValueOnce({
+      session: null,
+      absenceReason: "orphaned",
+      detail: "practice session workspace is unavailable",
+    });
+
+    const { result } = renderHook(() => useCurrentSession());
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("ready");
+    });
+
+    expect(result.current.session).toBeNull();
+    expect(result.current.absenceReason).toBe("orphaned");
+    expect(result.current.error).toBe("practice session workspace is unavailable");
+  });
+
   it("keeps the last known session mounted when refresh fails", async () => {
     mockFetchCurrentSession
       .mockResolvedValueOnce({

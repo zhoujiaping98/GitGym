@@ -1,4 +1,4 @@
-export type SessionAbsenceReason = "unauthenticated" | "missing";
+export type SessionAbsenceReason = "unauthenticated" | "missing" | "orphaned";
 
 export type PracticeSession = {
   id: number;
@@ -12,6 +12,24 @@ export type PracticeSession = {
   endedAt?: string | null;
   expiresAt: string;
   lastActivityAt: string;
+};
+
+export type PracticeTemplate = {
+  id: number;
+  key: string;
+  name: string;
+};
+
+export type PracticeScenario = {
+  id: number;
+  key: string;
+  name: string;
+  templateId: number;
+};
+
+export type PracticeCatalog = {
+  templates: PracticeTemplate[];
+  scenarios: PracticeScenario[];
 };
 
 export type CurrentSessionState = {

@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 )
 
 var ErrClientNotConfigured = errors.New("runner client is not configured")
+var ErrWorkspaceNotFound = errors.New("runner workspace not found")
 
 type Workspace struct {
 	ID       string `json:"id"`
@@ -31,6 +33,7 @@ type Client interface {
 	CreateWorkspace(ctx context.Context, template string) (Workspace, error)
 	ResetWorkspace(ctx context.Context, workspaceID string) error
 	ConnectTerminal(ctx context.Context, workspaceID string) (TerminalConnection, error)
+	DeleteWorkspace(ctx context.Context, workspaceID string, reason string, deleteAfter time.Duration) error
 }
 
 type HTTPClient struct {
@@ -114,6 +117,9 @@ func (c *HTTPClient) ResetWorkspace(ctx context.Context, workspaceID string) err
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusAccepted {
+		if resp.StatusCode == http.StatusNotFound {
+			return ErrWorkspaceNotFound
+		}
 		return fmt.Errorf("runner reset workspace returned status %d", resp.StatusCode)
 	}
 
@@ -126,12 +132,63 @@ func (c *HTTPClient) ConnectTerminal(ctx context.Context, workspaceID string) (T
 		return nil, err
 	}
 
-	conn, _, err := websocket.Dial(ctx, terminalURL, nil)
+	conn, resp, err := websocket.Dial(ctx, terminalURL, nil)
 	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return nil, ErrWorkspaceNotFound
+		}
 		return nil, fmt.Errorf("connect runner terminal: %w", err)
 	}
 
 	return websocketTerminalConnection{conn: conn}, nil
+}
+
+func (c *HTTPClient) DeleteWorkspace(ctx context.Context, workspaceID string, reason string, deleteAfter time.Duration) error {
+	if c.baseURL == "" {
+		return ErrClientNotConfigured
+	}
+	if strings.TrimSpace(workspaceID) == "" {
+		return fmt.Errorf("workspace ID is required")
+	}
+
+	payload := struct {
+		Reason             string `json:"reason"`
+		DeleteAfterSeconds int    `json:"delete_after_seconds"`
+	}{
+		Reason:             reason,
+		DeleteAfterSeconds: int(deleteAfter / time.Second),
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal delete workspace request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodDelete,
+		c.baseURL+"/internal/workspaces/"+url.PathEscape(workspaceID),
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return fmt.Errorf("build delete workspace request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete runner workspace: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return ErrWorkspaceNotFound
+	}
+	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("runner delete workspace returned status %d", resp.StatusCode)
+	}
+
+	return nil
 }
 
 func (c *HTTPClient) terminalURL(workspaceID string) (string, error) {

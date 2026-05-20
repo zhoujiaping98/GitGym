@@ -65,10 +65,66 @@ func TestPracticeTerminalWebSocketRejectsForeignSession(t *testing.T) {
 	}
 }
 
+func TestPracticeTerminalWebSocketReturnsGoneWhenRunnerWorkspaceIsMissing(t *testing.T) {
+	t.Parallel()
+
+	practiceService := service.NewPracticeService(
+		service.NewInMemoryPracticeSessionStore(),
+		&stubRunnerClient{
+			workspace: runner.Workspace{
+				ID:       "ws-missing-terminal",
+				Path:     "/tmp/ws-missing-terminal",
+				Template: "standard",
+			},
+			connectErr: runner.ErrWorkspaceNotFound,
+		},
+		func() time.Time {
+			return time.Date(2026, 5, 19, 15, 0, 0, 0, time.UTC)
+		},
+	)
+
+	session, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 1,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	apiServer := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
+		PracticeService: practiceService,
+		AuthStore:       authStoreWithSession("missing-terminal-token", 42),
+	}))
+	defer apiServer.Close()
+
+	ctx, cancel := testTimeoutContext(t)
+	defer cancel()
+
+	_, resp, err := websocket.Dial(ctx, practiceTerminalURL(apiServer.URL, session.ID), &websocket.DialOptions{
+		HTTPHeader: practiceTerminalHeaders("missing-terminal-token"),
+	})
+	if err == nil {
+		t.Fatal("expected websocket dial to fail for missing runner workspace")
+	}
+	if resp == nil {
+		t.Fatal("expected HTTP response for rejected websocket dial")
+	}
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("expected 410 for missing runner workspace, got %d", resp.StatusCode)
+	}
+}
+
 func TestPracticeTerminalWebSocketBridgesRunnerOutput(t *testing.T) {
 	t.Parallel()
 
 	runnerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/workspaces" && r.Method == http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"ws-output","path":"/tmp/ws-output","template":"standard"}`))
+			return
+		}
 		if r.URL.Path != "/internal/workspaces/ws-output/terminal" {
 			http.NotFound(w, r)
 			return
@@ -88,13 +144,7 @@ func TestPracticeTerminalWebSocketBridgesRunnerOutput(t *testing.T) {
 
 	practiceService := service.NewPracticeService(
 		service.NewInMemoryPracticeSessionStore(),
-		&stubRunnerClient{
-			workspace: runner.Workspace{
-				ID:       "ws-output",
-				Path:     "/tmp/ws-output",
-				Template: "standard",
-			},
-		},
+		runner.NewClient(runnerServer.URL, http.DefaultClient),
 		func() time.Time {
 			return time.Date(2026, 5, 17, 8, 5, 0, 0, time.UTC)
 		},
@@ -112,7 +162,6 @@ func TestPracticeTerminalWebSocketBridgesRunnerOutput(t *testing.T) {
 	apiServer := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
 		PracticeService: practiceService,
 		AuthStore:       authStoreWithSession("runner-output-token", 42),
-		RunnerClient:    runner.NewClient(runnerServer.URL, http.DefaultClient),
 	}))
 	defer apiServer.Close()
 
@@ -135,6 +184,12 @@ func TestPracticeTerminalWebSocketAllowsConfiguredFrontendOrigin(t *testing.T) {
 	t.Parallel()
 
 	runnerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/workspaces" && r.Method == http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"ws-origin","path":"/tmp/ws-origin","template":"standard"}`))
+			return
+		}
 		if r.URL.Path != "/internal/workspaces/ws-origin/terminal" {
 			http.NotFound(w, r)
 			return
@@ -154,13 +209,7 @@ func TestPracticeTerminalWebSocketAllowsConfiguredFrontendOrigin(t *testing.T) {
 
 	practiceService := service.NewPracticeService(
 		service.NewInMemoryPracticeSessionStore(),
-		&stubRunnerClient{
-			workspace: runner.Workspace{
-				ID:       "ws-origin",
-				Path:     "/tmp/ws-origin",
-				Template: "standard",
-			},
-		},
+		runner.NewClient(runnerServer.URL, http.DefaultClient),
 		func() time.Time {
 			return time.Date(2026, 5, 19, 8, 20, 0, 0, time.UTC)
 		},
@@ -178,7 +227,6 @@ func TestPracticeTerminalWebSocketAllowsConfiguredFrontendOrigin(t *testing.T) {
 	apiServer := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
 		PracticeService: practiceService,
 		AuthStore:       authStoreWithSession("origin-token", 42),
-		RunnerClient:    runner.NewClient(runnerServer.URL, http.DefaultClient),
 		AuthConfig: config.Config{
 			FrontendRedirectURL: "http://127.0.0.1:5173",
 		},
@@ -212,6 +260,12 @@ func TestPracticeTerminalWebSocketBridgesRunnerCommandCompletionFrames(t *testin
 	t.Parallel()
 
 	runnerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/workspaces" && r.Method == http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"ws-completion","path":"/tmp/ws-completion","template":"standard"}`))
+			return
+		}
 		if r.URL.Path != "/internal/workspaces/ws-completion/terminal" {
 			http.NotFound(w, r)
 			return
@@ -237,13 +291,7 @@ func TestPracticeTerminalWebSocketBridgesRunnerCommandCompletionFrames(t *testin
 
 	practiceService := service.NewPracticeService(
 		service.NewInMemoryPracticeSessionStore(),
-		&stubRunnerClient{
-			workspace: runner.Workspace{
-				ID:       "ws-completion",
-				Path:     "/tmp/ws-completion",
-				Template: "standard",
-			},
-		},
+		runner.NewClient(runnerServer.URL, http.DefaultClient),
 		func() time.Time {
 			return time.Date(2026, 5, 17, 8, 7, 0, 0, time.UTC)
 		},
@@ -261,7 +309,6 @@ func TestPracticeTerminalWebSocketBridgesRunnerCommandCompletionFrames(t *testin
 	apiServer := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
 		PracticeService: practiceService,
 		AuthStore:       authStoreWithSession("runner-completion-token", 42),
-		RunnerClient:    runner.NewClient(runnerServer.URL, http.DefaultClient),
 	}))
 	defer apiServer.Close()
 
@@ -290,6 +337,12 @@ func TestPracticeTerminalWebSocketForwardsBrowserInput(t *testing.T) {
 
 	forwarded := make(chan string, 1)
 	runnerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/workspaces" && r.Method == http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"ws-input","path":"/tmp/ws-input","template":"standard"}`))
+			return
+		}
 		if r.URL.Path != "/internal/workspaces/ws-input/terminal" {
 			http.NotFound(w, r)
 			return
@@ -316,13 +369,7 @@ func TestPracticeTerminalWebSocketForwardsBrowserInput(t *testing.T) {
 
 	practiceService := service.NewPracticeService(
 		service.NewInMemoryPracticeSessionStore(),
-		&stubRunnerClient{
-			workspace: runner.Workspace{
-				ID:       "ws-input",
-				Path:     "/tmp/ws-input",
-				Template: "standard",
-			},
-		},
+		runner.NewClient(runnerServer.URL, http.DefaultClient),
 		func() time.Time {
 			return time.Date(2026, 5, 17, 8, 10, 0, 0, time.UTC)
 		},
@@ -340,7 +387,6 @@ func TestPracticeTerminalWebSocketForwardsBrowserInput(t *testing.T) {
 	apiServer := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
 		PracticeService: practiceService,
 		AuthStore:       authStoreWithSession("browser-input-token", 42),
-		RunnerClient:    runner.NewClient(runnerServer.URL, http.DefaultClient),
 	}))
 	defer apiServer.Close()
 
@@ -367,15 +413,24 @@ func TestPracticeTerminalWebSocketForwardsBrowserInput(t *testing.T) {
 func TestPracticeTerminalWebSocketPreservesRunnerCloseStatus(t *testing.T) {
 	t.Parallel()
 
+	runnerClient := &stubRunnerClient{
+		workspace: runner.Workspace{
+			ID:       "ws-close",
+			Path:     "/tmp/ws-close",
+			Template: "standard",
+		},
+		connectTerminalFunc: func(context.Context, string) (runner.TerminalConnection, error) {
+			return terminalConnectionStub{
+				readErr: websocket.CloseError{
+					Code:   websocket.StatusPolicyViolation,
+					Reason: "runner refused",
+				},
+			}, nil
+		},
+	}
 	practiceService := service.NewPracticeService(
 		service.NewInMemoryPracticeSessionStore(),
-		&stubRunnerClient{
-			workspace: runner.Workspace{
-				ID:       "ws-close",
-				Path:     "/tmp/ws-close",
-				Template: "standard",
-			},
-		},
+		runnerClient,
 		func() time.Time {
 			return time.Date(2026, 5, 17, 8, 15, 0, 0, time.UTC)
 		},
@@ -393,16 +448,6 @@ func TestPracticeTerminalWebSocketPreservesRunnerCloseStatus(t *testing.T) {
 	apiServer := httptest.NewServer(httpx.NewRouter(httpx.Dependencies{
 		PracticeService: practiceService,
 		AuthStore:       authStoreWithSession("runner-close-token", 42),
-		RunnerClient: &stubRunnerClient{
-			connectTerminalFunc: func(context.Context, string) (runner.TerminalConnection, error) {
-				return terminalConnectionStub{
-					readErr: websocket.CloseError{
-						Code:   websocket.StatusPolicyViolation,
-						Reason: "runner refused",
-					},
-				}, nil
-			},
-		},
 	}))
 	defer apiServer.Close()
 

@@ -22,6 +22,7 @@ export function useCurrentSession(): CurrentSessionState {
       const currentSession = await fetchCurrentSession(signal);
       setSession(currentSession.session);
       setAbsenceReason(currentSession.absenceReason);
+      setError(currentSession.detail ?? null);
       setStatus("ready");
       return currentSession.session;
     } catch (loadError) {

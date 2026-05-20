@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -33,6 +34,89 @@ var (
 	openMySQLStoreForTests            func(string) (service.UserStore, error)
 )
 
+type practiceCatalogStore interface {
+	ListPracticeTemplates(ctx context.Context) ([]service.PracticeTemplate, error)
+	ListPracticeScenarios(ctx context.Context) ([]service.PracticeScenario, error)
+}
+
+type storeBackedPracticeCatalog struct {
+	store practiceCatalogStore
+}
+
+func (c storeBackedPracticeCatalog) ListTemplates(ctx context.Context) ([]service.PracticeTemplate, error) {
+	return c.store.ListPracticeTemplates(ctx)
+}
+
+func (c storeBackedPracticeCatalog) ListScenarios(ctx context.Context) ([]service.PracticeScenario, error) {
+	templates, err := c.store.ListPracticeTemplates(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	scenarios, err := c.store.ListPracticeScenarios(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := validateScenarioTemplateReferences(templates, scenarios); err != nil {
+		return nil, err
+	}
+
+	return scenarios, nil
+}
+
+func (c storeBackedPracticeCatalog) TemplateByID(ctx context.Context, templateID uint64) (service.PracticeTemplate, error) {
+	templates, err := c.store.ListPracticeTemplates(ctx)
+	if err != nil {
+		return service.PracticeTemplate{}, err
+	}
+
+	for _, template := range templates {
+		if template.ID == templateID {
+			return template, nil
+		}
+	}
+
+	return service.PracticeTemplate{}, fmt.Errorf("%w: %d", service.ErrUnknownPracticeTemplate, templateID)
+}
+
+func (c storeBackedPracticeCatalog) ScenarioByID(ctx context.Context, scenarioID uint64) (service.PracticeScenario, error) {
+	scenarios, err := c.store.ListPracticeScenarios(ctx)
+	if err != nil {
+		return service.PracticeScenario{}, err
+	}
+
+	for _, scenario := range scenarios {
+		if scenario.ID == scenarioID {
+			return scenario, nil
+		}
+	}
+
+	return service.PracticeScenario{}, fmt.Errorf("%w: %d", service.ErrUnknownPracticeScenario, scenarioID)
+}
+
+func validateScenarioTemplateReferences(templates []service.PracticeTemplate, scenarios []service.PracticeScenario) error {
+	templateIDs := make(map[uint64]struct{}, len(templates))
+	for _, template := range templates {
+		templateIDs[template.ID] = struct{}{}
+	}
+
+	for _, scenario := range scenarios {
+		if _, ok := templateIDs[scenario.TemplateID]; ok {
+			continue
+		}
+
+		return fmt.Errorf(
+			"%w: scenario %d references missing template %d",
+			service.ErrPracticeServiceConfiguration,
+			scenario.ID,
+			scenario.TemplateID,
+		)
+	}
+
+	return nil
+}
+
 func NewRouter(deps ...Dependencies) http.Handler {
 	dependencies := mergeDependencies(defaultDependencies(), deps...)
 	if dependencies.InitializationError != nil {
@@ -49,6 +133,7 @@ func NewRouter(deps ...Dependencies) http.Handler {
 		dependencies.PracticeService = service.NewPracticeService(
 			practiceStore,
 			dependencies.RunnerClient,
+			practiceCatalogFromDependencies(dependencies),
 			time.Now,
 		)
 	}
@@ -92,6 +177,16 @@ func practiceSessionStoreFromDependencies(dependencies Dependencies) service.Pra
 	}
 
 	return practiceStore
+}
+
+func practiceCatalogFromDependencies(dependencies Dependencies) service.PracticeCatalog {
+	if dependencies.AuthStore != nil {
+		if catalogStore, ok := dependencies.AuthStore.(practiceCatalogStore); ok {
+			return storeBackedPracticeCatalog{store: catalogStore}
+		}
+	}
+
+	return service.NewFallbackPracticeCatalog()
 }
 
 func defaultDependencies() Dependencies {

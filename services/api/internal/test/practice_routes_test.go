@@ -3,8 +3,11 @@ package test
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +18,7 @@ import (
 	httpx "gitgym/services/api/internal/http"
 	"gitgym/services/api/internal/runner"
 	"gitgym/services/api/internal/service"
+	"gitgym/services/api/internal/store"
 )
 
 func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
@@ -34,7 +38,7 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 		}{
 			{name: "list templates", method: http.MethodGet, target: "/api/v1/templates", status: http.StatusOK},
 			{name: "current session", method: http.MethodGet, target: "/api/v1/practice-sessions/current", status: http.StatusNotFound},
-			{name: "create session", method: http.MethodPost, target: "/api/v1/practice-sessions", body: []byte(`{"scenario_id":1,"template_id":1}`), status: http.StatusCreated},
+			{name: "create session", method: http.MethodPost, target: "/api/v1/practice-sessions", body: []byte(`{"scenario_id":1}`), status: http.StatusCreated},
 			{name: "reset session", method: http.MethodPost, target: "/api/v1/practice-sessions/123/reset", status: http.StatusAccepted},
 			{name: "terminal route", method: http.MethodGet, target: "/api/v1/practice-sessions/123/terminal", status: http.StatusNotFound},
 		}
@@ -58,7 +62,7 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 	})
 
 	t.Run("create session remains protected without cookie", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1,"template_id":1}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1}`))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 
@@ -83,7 +87,7 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 	t.Run("dev auth bypass allows local requests without cookie", func(t *testing.T) {
 		t.Setenv("DEV_AUTH_BYPASS", "true")
 
-		createReq := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1,"template_id":1}`))
+		createReq := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1}`))
 		createReq.Header.Set("Content-Type", "application/json")
 		createReq.RemoteAddr = "127.0.0.1:45678"
 		createRec := httptest.NewRecorder()
@@ -154,16 +158,240 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 	})
 }
 
+func TestListPracticeCatalogReturnsTemplatesAndScenarios(t *testing.T) {
+	t.Parallel()
+
+	router := httpx.NewRouter(httpx.Dependencies{
+		PracticeService: &stubPracticeService{
+			listTemplatesResult: []service.PracticeTemplate{
+				{ID: 2, Key: "recovery", Name: "Recovery"},
+			},
+			listScenariosResult: []service.PracticeScenario{
+				{ID: 8, Key: "recover-branch", Name: "Recover Branch", TemplateID: 2},
+			},
+		},
+		AuthStore: authStoreWithSession("catalog-store-token", 42),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/templates", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "catalog-store-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Templates []struct {
+			ID   uint64 `json:"id"`
+			Key  string `json:"key"`
+			Name string `json:"name"`
+		} `json:"templates"`
+		Scenarios []struct {
+			ID         uint64 `json:"id"`
+			Key        string `json:"key"`
+			Name       string `json:"name"`
+			TemplateID uint64 `json:"template_id"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal catalog payload: %v", err)
+	}
+	if len(payload.Templates) != 1 || payload.Templates[0].ID != 2 || payload.Templates[0].Key != "recovery" || payload.Templates[0].Name != "Recovery" {
+		t.Fatalf("unexpected templates payload: %+v", payload.Templates)
+	}
+	if len(payload.Scenarios) != 1 || payload.Scenarios[0].ID != 8 || payload.Scenarios[0].Key != "recover-branch" || payload.Scenarios[0].Name != "Recover Branch" || payload.Scenarios[0].TemplateID != 2 {
+		t.Fatalf("unexpected scenarios payload: %+v", payload.Scenarios)
+	}
+}
+
+func TestRouterUsesFallbackCatalogWhenNoCatalogStoreIsAvailable(t *testing.T) {
+	t.Parallel()
+
+	router := httpx.NewRouter(httpx.Dependencies{
+		AuthStore: authStoreWithSession("fallback-catalog-token", 42),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/templates", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "fallback-catalog-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Templates []struct {
+			Key string `json:"key"`
+		} `json:"templates"`
+		Scenarios []struct {
+			Key string `json:"key"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal fallback catalog payload: %v", err)
+	}
+	if len(payload.Templates) != 1 || payload.Templates[0].Key != "standard" {
+		t.Fatalf("unexpected fallback templates: %+v", payload.Templates)
+	}
+	if len(payload.Scenarios) != 1 || payload.Scenarios[0].Key != "sandbox-standard" {
+		t.Fatalf("unexpected fallback scenarios: %+v", payload.Scenarios)
+	}
+}
+
+func TestRouterUsesCatalogStoreWhenAuthStoreSupportsCatalogReads(t *testing.T) {
+	t.Parallel()
+
+	router := httpx.NewRouter(httpx.Dependencies{
+		AuthStore: &catalogPersistentStubStore{
+			persistentStubStore: newPersistentStubStore("catalog-store-token", 42),
+			templates: []service.PracticeTemplate{
+				{ID: 2, Key: "recovery", Name: "Recovery"},
+			},
+			scenarios: []service.PracticeScenario{
+				{ID: 8, Key: "recover-branch", Name: "Recover Branch", TemplateID: 2},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/templates", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "catalog-store-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Templates []struct {
+			ID   uint64 `json:"id"`
+			Key  string `json:"key"`
+			Name string `json:"name"`
+		} `json:"templates"`
+		Scenarios []struct {
+			ID         uint64 `json:"id"`
+			Key        string `json:"key"`
+			Name       string `json:"name"`
+			TemplateID uint64 `json:"template_id"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal catalog payload: %v", err)
+	}
+	if len(payload.Templates) != 1 || payload.Templates[0].ID != 2 || payload.Templates[0].Key != "recovery" {
+		t.Fatalf("unexpected templates payload: %+v", payload.Templates)
+	}
+	if len(payload.Scenarios) != 1 || payload.Scenarios[0].ID != 8 || payload.Scenarios[0].Key != "recover-branch" || payload.Scenarios[0].TemplateID != 2 {
+		t.Fatalf("unexpected scenarios payload: %+v", payload.Scenarios)
+	}
+}
+
+func TestListPracticeCatalogReturnsServerErrorOnCatalogReadFailure(t *testing.T) {
+	t.Parallel()
+
+	router := httpx.NewRouter(httpx.Dependencies{
+		PracticeService: &stubPracticeService{
+			listTemplatesErr: errors.New("list practice templates: database offline"),
+		},
+		AuthStore: authStoreWithSession("catalog-error-token", 42),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/templates", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "catalog-error-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d with body %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal error payload: %v", err)
+	}
+	if payload.Error == "" {
+		t.Fatalf("expected error payload, got %s", rec.Body.String())
+	}
+}
+
+func TestListPracticeCatalogReturnsServerErrorWhenScenarioTemplateReferenceIsBroken(t *testing.T) {
+	t.Parallel()
+
+	router := httpx.NewRouter(httpx.Dependencies{
+		AuthStore: &catalogPersistentStubStore{
+			persistentStubStore: newPersistentStubStore("catalog-broken-token", 42),
+			templates: []service.PracticeTemplate{
+				{ID: 2, Key: "recovery", Name: "Recovery"},
+			},
+			scenarios: []service.PracticeScenario{
+				{ID: 8, Key: "recover-branch", Name: "Recover Branch", TemplateID: 999},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/templates", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "catalog-broken-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d with body %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal error payload: %v", err)
+	}
+	if payload.Error == "" {
+		t.Fatalf("expected error payload, got %s", rec.Body.String())
+	}
+}
+
+func TestMySQLStoreUpdatePracticeSessionReturnsNotFoundWhenNoRowsUpdated(t *testing.T) {
+	db := openExecOnlySQLDB(t, execOnlySQLDriver{
+		rowsAffected: 0,
+	})
+	defer db.Close()
+
+	mysqlStore := store.NewMySQLStore(db)
+
+	_, err := mysqlStore.UpdatePracticeSession(context.Background(), domain.PracticeSession{
+		ID:             999,
+		Status:         service.PracticeSessionStatusExpired,
+		LastActivityAt: time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC),
+	})
+
+	if !errors.Is(err, service.ErrPracticeSessionNotFound) {
+		t.Fatalf("expected practice session not found error, got %v", err)
+	}
+}
+
 func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testing.T) {
 	t.Parallel()
 
 	recordingService := &stubPracticeService{
 		createPracticeSessionFunc: func(_ context.Context, input service.CreatePracticeSessionInput) (domain.PracticeSession, error) {
+			templateID := input.TemplateID
+			if templateID == 0 {
+				templateID = 1
+			}
 			return domain.PracticeSession{
 				ID:               101,
 				UserID:           input.UserID,
 				ScenarioID:       input.ScenarioID,
-				TemplateID:       input.TemplateID,
+				TemplateID:       templateID,
 				RunnerRef:        "ws-123",
 				WorkspacePathRef: "/tmp/ws-123",
 				Status:           "active",
@@ -179,7 +407,7 @@ func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testi
 		AuthStore:       authStoreWithSession("user-42-session-token", 42),
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"user_id":999,"scenario_id":1,"template_id":1}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"user_id":999,"scenario_id":1}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "user-42-session-token"})
 	rec := httptest.NewRecorder()
@@ -195,8 +423,8 @@ func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testi
 	if recordingService.lastCreateInput.ScenarioID != 1 {
 		t.Fatalf("expected scenario ID 1, got %d", recordingService.lastCreateInput.ScenarioID)
 	}
-	if recordingService.lastCreateInput.TemplateID != 1 {
-		t.Fatalf("expected template ID 1, got %d", recordingService.lastCreateInput.TemplateID)
+	if recordingService.lastCreateInput.TemplateID != 0 {
+		t.Fatalf("expected handler to stop forwarding template ID, got %d", recordingService.lastCreateInput.TemplateID)
 	}
 	if strings.Contains(rec.Body.String(), `"UserID"`) {
 		t.Fatalf("expected stable JSON field names, got body %s", rec.Body.String())
@@ -222,8 +450,68 @@ func TestCreatePracticeSessionUsesAuthenticatedUserAndReturnsStableJSON(t *testi
 	if payload.Session.ID != 101 || payload.Session.UserID != 42 {
 		t.Fatalf("unexpected session payload: %+v", payload.Session)
 	}
+	if payload.Session.ScenarioID != 1 || payload.Session.TemplateID != 1 {
+		t.Fatalf("unexpected catalog identifiers in payload: %+v", payload.Session)
+	}
 	if payload.Session.RunnerRef != "ws-123" || payload.Session.WorkspacePath != "/tmp/ws-123" {
 		t.Fatalf("unexpected runner payload: %+v", payload.Session)
+	}
+}
+
+func TestCreatePracticeSessionAcceptsScenarioIDOnly(t *testing.T) {
+	t.Parallel()
+
+	recordingService := &stubPracticeService{}
+	router := httpx.NewRouter(httpx.Dependencies{
+		PracticeService: recordingService,
+		AuthStore:       authStoreWithSession("scenario-only-token", 42),
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "scenario-only-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d with body %s", rec.Code, rec.Body.String())
+	}
+	if recordingService.lastCreateInput.ScenarioID != 1 {
+		t.Fatalf("expected scenario ID 1, got %d", recordingService.lastCreateInput.ScenarioID)
+	}
+	if recordingService.lastCreateInput.TemplateID != 0 {
+		t.Fatalf("expected template ID to be omitted, got %d", recordingService.lastCreateInput.TemplateID)
+	}
+}
+
+func TestCreatePracticeSessionRejectsMissingScenarioID(t *testing.T) {
+	t.Parallel()
+
+	router := httpx.NewRouter(httpx.Dependencies{
+		PracticeService: &stubPracticeService{},
+		AuthStore:       authStoreWithSession("missing-scenario-token", 42),
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "missing-scenario-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d with body %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal error payload: %v", err)
+	}
+	if payload.Error != "scenario_id is required" {
+		t.Fatalf("expected missing scenario error, got %q", payload.Error)
 	}
 }
 
@@ -306,7 +594,7 @@ func TestCurrentPracticeSessionSurvivesRouterRebuildWhenStoreIsPersistent(t *tes
 		RunnerClient: runnerClient,
 	})
 
-	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1,"template_id":1}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1}`))
 	createReq.Header.Set("Content-Type", "application/json")
 	createReq.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "persistent-session-token"})
 	createRec := httptest.NewRecorder()
@@ -330,6 +618,29 @@ func TestCurrentPracticeSessionSurvivesRouterRebuildWhenStoreIsPersistent(t *tes
 
 	if currentRec.Code != http.StatusOK {
 		t.Fatalf("expected rebuilt router to recover current session, got %d with body %s", currentRec.Code, currentRec.Body.String())
+	}
+}
+
+func TestCurrentPracticeSessionMapsOrphanedStateToGone(t *testing.T) {
+	t.Parallel()
+
+	router := httpx.NewRouter(httpx.Dependencies{
+		PracticeService: &stubPracticeService{
+			currentPracticeSessionFunc: func(context.Context, uint64) (domain.PracticeSession, error) {
+				return domain.PracticeSession{}, service.ErrPracticeSessionOrphaned
+			},
+		},
+		AuthStore: authStoreWithSession("current-orphaned-token", 42),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/current", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "current-orphaned-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d with body %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -360,7 +671,7 @@ func TestCreatePracticeSessionMapsErrors(t *testing.T) {
 				AuthStore: authStoreWithSession("create-error-token", 42),
 			})
 
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1,"template_id":1}`))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/practice-sessions", strings.NewReader(`{"scenario_id":1}`))
 			req.Header.Set("Content-Type", "application/json")
 			req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "create-error-token"})
 			rec := httptest.NewRecorder()
@@ -410,6 +721,8 @@ func TestResetPracticeSessionMapsErrors(t *testing.T) {
 	}{
 		{name: "bad input", err: service.ErrInvalidPracticeSessionInput, status: http.StatusBadRequest},
 		{name: "not found", err: service.ErrPracticeSessionNotFound, status: http.StatusNotFound},
+		{name: "expired", err: service.ErrPracticeSessionExpired, status: http.StatusGone},
+		{name: "orphaned", err: service.ErrPracticeSessionOrphaned, status: http.StatusGone},
 		{name: "service configuration", err: service.ErrPracticeServiceConfiguration, status: http.StatusInternalServerError},
 		{name: "runner reset failure", err: service.ErrRunnerWorkspaceReset, status: http.StatusBadGateway},
 	}
@@ -443,13 +756,43 @@ type stubPracticeService struct {
 	resetPracticeSessionFunc   func(context.Context, uint64, uint64) error
 	currentPracticeSessionFunc func(context.Context, uint64) (domain.PracticeSession, error)
 	practiceSessionByIDFunc    func(context.Context, uint64, uint64) (domain.PracticeSession, error)
+	connectTerminalFunc        func(context.Context, uint64, uint64) (runner.TerminalConnection, error)
+	expireStaleSessionsFunc    func(context.Context) (int, error)
+	listTemplatesResult        []service.PracticeTemplate
+	listScenariosResult        []service.PracticeScenario
+	listTemplatesErr           error
+	listScenariosErr           error
 	lastCreateInput            service.CreatePracticeSessionInput
 	lastResetUserID            uint64
 	lastResetSessionID         uint64
 }
 
 func (s *stubPracticeService) ListTemplates(context.Context) []service.PracticeTemplate {
+	if s.listTemplatesResult != nil {
+		return append([]service.PracticeTemplate(nil), s.listTemplatesResult...)
+	}
 	return []service.PracticeTemplate{{ID: 1, Key: "standard", Name: "Standard"}}
+}
+
+func (s *stubPracticeService) ListScenarios(context.Context) []service.PracticeScenario {
+	if s.listScenariosResult != nil {
+		return append([]service.PracticeScenario(nil), s.listScenariosResult...)
+	}
+	return []service.PracticeScenario{{ID: 1, Key: "sandbox-standard", Name: "Standard Sandbox", TemplateID: 1}}
+}
+
+func (s *stubPracticeService) ListTemplatesWithError(_ context.Context) ([]service.PracticeTemplate, error) {
+	if s.listTemplatesErr != nil {
+		return nil, s.listTemplatesErr
+	}
+	return s.ListTemplates(context.Background()), nil
+}
+
+func (s *stubPracticeService) ListScenariosWithError(_ context.Context) ([]service.PracticeScenario, error) {
+	if s.listScenariosErr != nil {
+		return nil, s.listScenariosErr
+	}
+	return s.ListScenarios(context.Background()), nil
 }
 
 func (s *stubPracticeService) CreatePracticeSession(ctx context.Context, input service.CreatePracticeSessionInput) (domain.PracticeSession, error) {
@@ -457,7 +800,17 @@ func (s *stubPracticeService) CreatePracticeSession(ctx context.Context, input s
 	if s.createPracticeSessionFunc != nil {
 		return s.createPracticeSessionFunc(ctx, input)
 	}
-	return domain.PracticeSession{ID: 1, Status: "active"}, nil
+	templateID := input.TemplateID
+	if templateID == 0 {
+		templateID = 1
+	}
+	return domain.PracticeSession{
+		ID:         1,
+		UserID:     input.UserID,
+		ScenarioID: input.ScenarioID,
+		TemplateID: templateID,
+		Status:     "active",
+	}, nil
 }
 
 func (s *stubPracticeService) ResetPracticeSession(ctx context.Context, userID uint64, sessionID uint64) error {
@@ -483,6 +836,20 @@ func (s *stubPracticeService) PracticeSessionByID(ctx context.Context, userID ui
 	return domain.PracticeSession{}, service.ErrPracticeSessionNotFound
 }
 
+func (s *stubPracticeService) ConnectTerminal(ctx context.Context, userID uint64, sessionID uint64) (runner.TerminalConnection, error) {
+	if s.connectTerminalFunc != nil {
+		return s.connectTerminalFunc(ctx, userID, sessionID)
+	}
+	return nil, service.ErrPracticeSessionNotFound
+}
+
+func (s *stubPracticeService) ExpireStalePracticeSessions(ctx context.Context) (int, error) {
+	if s.expireStaleSessionsFunc != nil {
+		return s.expireStaleSessionsFunc(ctx)
+	}
+	return 0, nil
+}
+
 func authStoreWithSession(rawToken string, userID uint64) *stubUserStore {
 	return &stubUserStore{
 		sessionByTokenHash: map[string]domain.BrowserSession{
@@ -501,9 +868,17 @@ type persistentStubStore struct {
 	practiceSessions *service.InMemoryPracticeSessionStore
 }
 
+type catalogPersistentStubStore struct {
+	*persistentStubStore
+	templates    []service.PracticeTemplate
+	scenarios    []service.PracticeScenario
+	templatesErr error
+	scenariosErr error
+}
+
 func newPersistentStubStore(rawToken string, userID uint64) *persistentStubStore {
 	return &persistentStubStore{
-		stubUserStore: authStoreWithSession(rawToken, userID),
+		stubUserStore:    authStoreWithSession(rawToken, userID),
 		practiceSessions: service.NewInMemoryPracticeSessionStore(),
 	}
 }
@@ -518,4 +893,73 @@ func (s *persistentStubStore) CurrentPracticeSession(ctx context.Context, userID
 
 func (s *persistentStubStore) PracticeSessionByID(ctx context.Context, sessionID uint64) (domain.PracticeSession, error) {
 	return s.practiceSessions.PracticeSessionByID(ctx, sessionID)
+}
+
+func (s *persistentStubStore) UpdatePracticeSession(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error) {
+	return s.practiceSessions.UpdatePracticeSession(ctx, session)
+}
+
+func (s *persistentStubStore) ExpirePracticeSessions(ctx context.Context, before time.Time, endedAt time.Time) ([]domain.PracticeSession, error) {
+	return s.practiceSessions.ExpirePracticeSessions(ctx, before, endedAt)
+}
+
+func (s *catalogPersistentStubStore) ListPracticeTemplates(context.Context) ([]service.PracticeTemplate, error) {
+	if s.templatesErr != nil {
+		return nil, s.templatesErr
+	}
+	return append([]service.PracticeTemplate(nil), s.templates...), nil
+}
+
+func (s *catalogPersistentStubStore) ListPracticeScenarios(context.Context) ([]service.PracticeScenario, error) {
+	if s.scenariosErr != nil {
+		return nil, s.scenariosErr
+	}
+	return append([]service.PracticeScenario(nil), s.scenarios...), nil
+}
+
+type execOnlySQLDriver struct {
+	rowsAffected int64
+	execErr      error
+}
+
+func openExecOnlySQLDB(t *testing.T, driverImpl execOnlySQLDriver) *sql.DB {
+	t.Helper()
+
+	driverName := fmt.Sprintf("exec-only-%d", time.Now().UnixNano())
+	sql.Register(driverName, driverImpl)
+
+	db, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatalf("open test sql db: %v", err)
+	}
+
+	return db
+}
+
+func (d execOnlySQLDriver) Open(string) (driver.Conn, error) {
+	return execOnlySQLConn{driver: d}, nil
+}
+
+type execOnlySQLConn struct {
+	driver execOnlySQLDriver
+}
+
+func (c execOnlySQLConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare not implemented")
+}
+
+func (c execOnlySQLConn) Close() error {
+	return nil
+}
+
+func (c execOnlySQLConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("transactions not implemented")
+}
+
+func (c execOnlySQLConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+	if c.driver.execErr != nil {
+		return nil, c.driver.execErr
+	}
+
+	return driver.RowsAffected(c.driver.rowsAffected), nil
 }

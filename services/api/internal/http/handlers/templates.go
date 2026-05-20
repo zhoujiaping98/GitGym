@@ -7,10 +7,32 @@ import (
 	"gitgym/services/api/internal/service"
 )
 
+type practiceCatalogResponse struct {
+	Templates []service.PracticeTemplate `json:"templates"`
+	Scenarios []service.PracticeScenario `json:"scenarios"`
+}
+
 func ListPracticeTemplates(practiceService service.PracticeService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"templates": practiceService.ListTemplates(r.Context()),
+		templates, err := practiceService.ListTemplatesWithError(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		scenarios, err := practiceService.ListScenariosWithError(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, practiceCatalogResponse{
+			Templates: templates,
+			Scenarios: scenarios,
 		})
 	}
 }

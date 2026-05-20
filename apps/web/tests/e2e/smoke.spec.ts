@@ -142,6 +142,12 @@ async function routeTerminalWebSocketToStub(page: Page, port: number) {
 
 test.describe("GitGym shell", () => {
   let terminalStub: TerminalStub;
+  const catalogPayload = {
+    templates: [{ id: 1, key: "standard", name: "Standard" }],
+    scenarios: [
+      { id: 1, key: "sandbox-standard", name: "Standard Sandbox", template_id: 1 },
+    ],
+  };
 
   const activeSessionPayload = {
     session: {
@@ -161,6 +167,13 @@ test.describe("GitGym shell", () => {
   test.beforeEach(async ({ page }) => {
     terminalStub = await createTerminalStub();
     await routeTerminalWebSocketToStub(page, terminalStub.port);
+    await page.route("**/api/v1/templates", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(catalogPayload),
+      });
+    });
   });
 
   test.afterEach(async () => {
@@ -233,6 +246,8 @@ test.describe("GitGym shell", () => {
         return;
       }
 
+      const body = JSON.parse(route.request().postData() ?? "{}");
+      expect(body).toEqual({ scenario_id: 1 });
       createSessionCalls += 1;
       await route.fulfill({
         status: 201,
@@ -391,6 +406,8 @@ test.describe("GitGym shell", () => {
         return;
       }
 
+      const body = JSON.parse(route.request().postData() ?? "{}");
+      expect(body).toEqual({ scenario_id: 1 });
       await route.fulfill({
         status: 201,
         contentType: "application/json",
@@ -455,6 +472,8 @@ test.describe("GitGym shell", () => {
         return;
       }
 
+      const body = JSON.parse(route.request().postData() ?? "{}");
+      expect(body).toEqual({ scenario_id: 1 });
       await route.fulfill({
         status: 201,
         contentType: "application/json",

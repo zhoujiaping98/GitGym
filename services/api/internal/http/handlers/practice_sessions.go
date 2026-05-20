@@ -15,7 +15,6 @@ import (
 
 type createPracticeSessionRequest struct {
 	ScenarioID uint64 `json:"scenario_id"`
-	TemplateID uint64 `json:"template_id"`
 }
 
 type practiceSessionResponse struct {
@@ -41,9 +40,9 @@ func CreatePracticeSession(practiceService service.PracticeService) http.Handler
 			})
 			return
 		}
-		if req.ScenarioID == 0 || req.TemplateID == 0 {
+		if req.ScenarioID == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": "scenario_id and template_id are required",
+				"error": "scenario_id is required",
 			})
 			return
 		}
@@ -59,7 +58,6 @@ func CreatePracticeSession(practiceService service.PracticeService) http.Handler
 		session, err := practiceService.CreatePracticeSession(r.Context(), service.CreatePracticeSessionInput{
 			UserID:     authenticatedSession.UserID,
 			ScenarioID: req.ScenarioID,
-			TemplateID: req.TemplateID,
 		})
 		if err != nil {
 			writeJSON(w, statusForCreatePracticeSessionError(err), map[string]any{
@@ -156,9 +154,11 @@ func statusForPracticeSessionMutationError(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, service.ErrPracticeSessionNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, service.ErrPracticeSessionExpired), errors.Is(err, service.ErrPracticeSessionOrphaned):
+		return http.StatusGone
 	case errors.Is(err, service.ErrPracticeServiceConfiguration):
 		return http.StatusInternalServerError
-	case errors.Is(err, service.ErrRunnerWorkspaceCreation), errors.Is(err, service.ErrRunnerWorkspaceReset):
+	case errors.Is(err, service.ErrRunnerWorkspaceCreation), errors.Is(err, service.ErrRunnerWorkspaceReset), errors.Is(err, service.ErrRunnerTerminalUnavailable):
 		return http.StatusBadGateway
 	default:
 		return http.StatusInternalServerError
@@ -171,8 +171,12 @@ func statusForPracticeSessionLookupError(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, service.ErrPracticeSessionNotFound):
 		return http.StatusNotFound
+	case errors.Is(err, service.ErrPracticeSessionExpired), errors.Is(err, service.ErrPracticeSessionOrphaned):
+		return http.StatusGone
 	case errors.Is(err, service.ErrPracticeServiceConfiguration):
 		return http.StatusInternalServerError
+	case errors.Is(err, service.ErrRunnerTerminalUnavailable):
+		return http.StatusBadGateway
 	default:
 		return http.StatusInternalServerError
 	}

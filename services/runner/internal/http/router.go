@@ -11,10 +11,12 @@ import (
 func NewRouter(workRoot string) http.Handler {
 	r := chi.NewRouter()
 	terminalManager := engine.NewTerminalManager()
+	cleanupManager := engine.NewWorkspaceCleanupManager(terminalManager)
 	r.Get("/healthz", handlers.Health())
 	r.Post("/internal/workspaces", handlers.CreateWorkspace(workRoot))
 	r.Post("/internal/workspaces/{workspaceID}/commands", handlers.RunCommand(workRoot))
 	r.Post("/internal/workspaces/{workspaceID}/reset", handlers.ResetWorkspace(workRoot))
+	r.Delete("/internal/workspaces/{workspaceID}", handlers.DeleteWorkspace(workRoot, terminalManager, cleanupManager))
 	r.Get("/internal/workspaces/{workspaceID}/terminal", handlers.TerminalWebSocket(workRoot, terminalManager))
 	return r
 }

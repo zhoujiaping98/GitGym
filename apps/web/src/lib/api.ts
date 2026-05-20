@@ -1,4 +1,10 @@
-import type { PracticeSession, SessionAbsenceReason } from "../types";
+import type {
+  PracticeCatalog,
+  PracticeScenario,
+  PracticeSession,
+  PracticeTemplate,
+  SessionAbsenceReason,
+} from "../types";
 
 const API_BASE = "/api/v1";
 
@@ -13,16 +19,26 @@ type CurrentSessionPayload = {
 
 type CreateSessionInput = {
   scenarioId: number;
-  templateId: number;
 };
 
 type ResetSessionPayload = {
   status: string;
 };
 
+type CatalogResponse = {
+  templates: Array<{ id: number; key: string; name: string }>;
+  scenarios: Array<{
+    id: number;
+    key: string;
+    name: string;
+    template_id: number;
+  }>;
+};
+
 type CurrentSessionLookup = {
   session: PracticeSession | null;
   absenceReason: SessionAbsenceReason | null;
+  detail?: string | null;
 };
 
 type SessionResponse = {
@@ -38,6 +54,23 @@ type SessionResponse = {
   expires_at: string;
   last_activity_at: string;
 };
+
+function toPracticeTemplate(template: CatalogResponse["templates"][number]): PracticeTemplate {
+  return {
+    id: template.id,
+    key: template.key,
+    name: template.name,
+  };
+}
+
+function toPracticeScenario(scenario: CatalogResponse["scenarios"][number]): PracticeScenario {
+  return {
+    id: scenario.id,
+    key: scenario.key,
+    name: scenario.name,
+    templateId: scenario.template_id,
+  };
+}
 
 export class ApiError extends Error {
   status: number;
@@ -59,10 +92,17 @@ async function readJson<T>(response: Response): Promise<ApiResponse<T>> {
     return { status: response.status, data: null };
   }
 
-  return {
-    status: response.status,
-    data: JSON.parse(text) as T,
-  };
+  try {
+    return {
+      status: response.status,
+      data: JSON.parse(text) as T,
+    };
+  } catch {
+    return {
+      status: response.status,
+      data: null,
+    };
+  }
 }
 
 function toPracticeSession(session: SessionResponse): PracticeSession {
@@ -110,6 +150,18 @@ export async function fetchCurrentSession(
     response,
   );
 
+  if (response.status === 410) {
+    const message =
+      payload.data && "error" in payload.data && payload.data.error
+        ? payload.data.error
+        : "Current session workspace is unavailable.";
+    return {
+      session: null,
+      absenceReason: "orphaned",
+      detail: message,
+    };
+  }
+
   if (!response.ok) {
     const message =
       payload.data && "error" in payload.data && payload.data.error
@@ -128,6 +180,35 @@ export async function fetchCurrentSession(
   };
 }
 
+export async function fetchPracticeCatalog(
+  signal?: AbortSignal,
+): Promise<PracticeCatalog> {
+  const response = await fetch(`${API_BASE}/templates`, {
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+    signal,
+  });
+
+  const payload = await readJson<CatalogResponse | { error?: string }>(response);
+  if (!response.ok) {
+    const message =
+      payload.data && "error" in payload.data && payload.data.error
+        ? payload.data.error
+        : "Request failed";
+    throw new ApiError(message, response.status);
+  }
+  if (!payload.data || !("templates" in payload.data) || !("scenarios" in payload.data)) {
+    throw new ApiError("Catalog response was malformed", response.status);
+  }
+
+  return {
+    templates: payload.data.templates.map(toPracticeTemplate),
+    scenarios: payload.data.scenarios.map(toPracticeScenario),
+  };
+}
+
 export async function createPracticeSession(
   input: CreateSessionInput,
 ): Promise<PracticeSession> {
@@ -140,7 +221,6 @@ export async function createPracticeSession(
     },
     body: JSON.stringify({
       scenario_id: input.scenarioId,
-      template_id: input.templateId,
     }),
   });
 

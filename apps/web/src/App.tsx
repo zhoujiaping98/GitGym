@@ -1,22 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LoginScreen } from "./components/LoginScreen";
 import { TopBar } from "./components/TopBar";
 import { Workbench } from "./components/Workbench";
 import { useCurrentSession } from "./hooks/useCurrentSession";
 import { useTerminalSession } from "./hooks/useTerminalSession";
-import { createPracticeSession, logout, resetPracticeSession } from "./lib/api";
-import type { PracticeSession } from "./types";
+import {
+  createPracticeSession,
+  fetchPracticeCatalog,
+  logout,
+  resetPracticeSession,
+} from "./lib/api";
+import type { PracticeCatalog, PracticeSession } from "./types";
 
-function templateLabel(templateId: number | null) {
+function templateLabel(templateId: number | null, catalog: PracticeCatalog | null) {
+  const template = catalog?.templates.find((entry) => entry.id === templateId);
+  if (template) {
+    return `Template: ${template.name}`;
+  }
+
   if (templateId === 1) {
     return "Template: Standard";
   }
 
   return templateId ? `Template #${templateId}` : "Template: Standard";
 }
-
-const defaultSandboxScenarioId = 1;
-const defaultSandboxTemplateId = 1;
 
 type ActionErrorState = {
   message: string;
@@ -36,6 +43,12 @@ type AppStateShellProps = {
   actionLabel?: string;
   onAction?: () => void;
 };
+
+type CatalogState =
+  | { status: "idle"; catalog: null; error: null }
+  | { status: "loading"; catalog: null; error: null }
+  | { status: "ready"; catalog: PracticeCatalog; error: null }
+  | { status: "error"; catalog: null; error: string };
 
 function AppStateShell({
   eyebrow,
@@ -69,6 +82,13 @@ export default function App() {
   const [pendingAction, setPendingAction] = useState<"reset" | "new-session" | "logout" | null>(null);
   const [hasAttemptedAutoCreate, setHasAttemptedAutoCreate] = useState(false);
   const [signedOutOverride, setSignedOutOverride] = useState(false);
+  const [catalogRequestKey, setCatalogRequestKey] = useState(0);
+  const [catalogState, setCatalogState] = useState<CatalogState>({
+    status: "idle",
+    catalog: null,
+    error: null,
+  });
+  const unavailableRefreshSessionIdRef = useRef<number | null>(null);
   const effectiveSession = signedOutOverride ? null : currentSession.session;
   const displayedSession = sessionOverride ?? effectiveSession;
   const terminalSession = useTerminalSession(displayedSession);
@@ -80,6 +100,22 @@ export default function App() {
     !signedOutOverride &&
     currentSession.status === "ready" &&
     currentSession.absenceReason === "missing";
+  const hasOrphanedSessionState =
+    !hasActiveSession &&
+    !signedOutOverride &&
+    currentSession.status === "ready" &&
+    currentSession.absenceReason === "orphaned";
+  const shouldShowCatalogState =
+    !signedOutOverride &&
+    currentSession.status === "ready" &&
+    currentSession.absenceReason !== "unauthenticated";
+  const catalog = catalogState.status === "ready" ? catalogState.catalog : null;
+  const defaultScenario = catalog?.scenarios[0] ?? null;
+  const hasEmptyCatalogState =
+    !hasActiveSession &&
+    shouldShowCatalogState &&
+    catalogState.status === "ready" &&
+    defaultScenario === null;
 
   useEffect(() => {
     if (
@@ -92,8 +128,46 @@ export default function App() {
   }, [currentSession.status, effectiveSession, sessionOverride]);
 
   useEffect(() => {
+    if (
+      signedOutOverride ||
+      (currentSession.status === "ready" && currentSession.absenceReason === "unauthenticated")
+    ) {
+      setCatalogState((previous) =>
+        previous.status === "idle" ? previous : { status: "idle", catalog: null, error: null },
+      );
+      return;
+    }
+
+    const controller = new AbortController();
+    setCatalogState({ status: "loading", catalog: null, error: null });
+
+    void fetchPracticeCatalog(controller.signal)
+      .then((nextCatalog) => {
+        setCatalogState({ status: "ready", catalog: nextCatalog, error: null });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setCatalogState({
+          status: "error",
+          catalog: null,
+          error:
+            error instanceof Error ? error.message : "Unable to load the practice catalog.",
+        });
+      });
+
+    return () => controller.abort();
+  }, [catalogRequestKey, currentSession.absenceReason, currentSession.status, signedOutOverride]);
+
+  useEffect(() => {
     if (!hasAuthenticatedEmptyState) {
       setHasAttemptedAutoCreate(false);
+      return;
+    }
+
+    if (catalogState.status !== "ready" || !defaultScenario) {
       return;
     }
 
@@ -102,8 +176,29 @@ export default function App() {
     }
 
     setHasAttemptedAutoCreate(true);
-    startNewSession(defaultSandboxScenarioId, defaultSandboxTemplateId);
-  }, [actionError, hasAttemptedAutoCreate, hasAuthenticatedEmptyState, pendingAction]);
+    startNewSession(defaultScenario.id);
+  }, [
+    actionError,
+    catalogState.status,
+    defaultScenario,
+    hasAttemptedAutoCreate,
+    hasAuthenticatedEmptyState,
+    pendingAction,
+  ]);
+
+  useEffect(() => {
+    if (!displayedSession || terminalSession.status !== "unavailable") {
+      unavailableRefreshSessionIdRef.current = null;
+      return;
+    }
+
+    if (unavailableRefreshSessionIdRef.current === displayedSession.id) {
+      return;
+    }
+
+    unavailableRefreshSessionIdRef.current = displayedSession.id;
+    void currentSession.refresh().catch(() => undefined);
+  }, [currentSession, displayedSession, terminalSession.status]);
 
   async function reconcileSessionAction(
     action: "reset" | "new-session",
@@ -190,14 +285,21 @@ export default function App() {
     }
   }
 
-  function startNewSession(scenarioId: number, templateId: number) {
+  function retryCatalogLoad() {
+    if (signedOutOverride) {
+      return;
+    }
+
+    setCatalogRequestKey((value) => value + 1);
+  }
+
+  function startNewSession(scenarioId: number) {
     const fallbackSession = displayedSession;
 
     setActionError(null);
     setPendingAction("new-session");
     void createPracticeSession({
       scenarioId,
-      templateId,
     })
       .then((nextSession) => {
         if (!fallbackSession) {
@@ -219,18 +321,17 @@ export default function App() {
   }
 
   const topBarActions = hasActiveSession
-    ? [
+      ? [
         {
           label: "New Session",
           onClick: () => {
-            if (displayedSession) {
-              startNewSession(displayedSession.scenarioId, displayedSession.templateId);
+            if (!defaultScenario) {
               return;
             }
 
-            startNewSession(defaultSandboxScenarioId, defaultSandboxTemplateId);
+            startNewSession(defaultScenario.id);
           },
-          disabled: pendingAction !== null,
+          disabled: pendingAction !== null || catalogState.status !== "ready" || !defaultScenario,
         },
         {
           label: "Reset",
@@ -269,7 +370,7 @@ export default function App() {
               .then(() => {
                 setSessionOverride(null);
                 setSignedOutOverride(true);
-                return currentSession.refresh();
+                void currentSession.refresh().catch(() => undefined);
               })
               .catch((error: unknown) => {
                 setActionError({
@@ -287,6 +388,8 @@ export default function App() {
   const sessionTone =
     hasActiveSession
       ? "active"
+      : hasOrphanedSessionState
+      ? "error"
       : currentSession.status === "loading"
       ? "pending"
       : currentSession.status === "error"
@@ -297,6 +400,8 @@ export default function App() {
       ? "Session live"
       : signedOutOverride
         ? "Signed out"
+      : hasOrphanedSessionState
+        ? "Workspace unavailable"
       : hasAuthenticatedEmptyState
         ? "Signed in"
       : currentSession.status === "loading"
@@ -309,7 +414,7 @@ export default function App() {
     <div className="app-shell">
       <TopBar
         actions={topBarActions}
-        metaLabel={templateLabel(displayedSession?.templateId ?? null)}
+        metaLabel={templateLabel(displayedSession?.templateId ?? null, catalog)}
         sessionLabel={sessionLabel}
         tone={sessionTone}
       />
@@ -341,12 +446,34 @@ export default function App() {
           title="Checking session"
           body="Restoring your practice workbench."
         />
+      ) : catalogState.status === "loading" && shouldShowCatalogState ? (
+        <AppStateShell
+          eyebrow="Catalog readying"
+          title="Loading practice catalog"
+          body="Checking which practice scenarios are available for this workspace."
+        />
+      ) : catalogState.status === "error" && shouldShowCatalogState ? (
+        <AppStateShell
+          eyebrow="Catalog unavailable"
+          title="Practice catalog unavailable"
+          body="We could not load the available practice scenarios."
+          detail={catalogState.error}
+          actionLabel="Try again"
+          onAction={retryCatalogLoad}
+        />
+      ) : hasEmptyCatalogState ? (
+        <AppStateShell
+          eyebrow="Catalog empty"
+          title="Practice catalog empty"
+          body="There are no practice scenarios available for this environment."
+          detail="Ask an administrator to publish at least one scenario before creating a session."
+        />
       ) : hasAuthenticatedEmptyState && !actionError ? (
         <AppStateShell
           eyebrow="Workspace ready"
           title="Preparing your workspace"
           body="Creating a disposable sandbox so you can land directly in the terminal."
-          detail="We will start you in the standard sandbox template."
+          detail="We will start you in the first available practice scenario."
         />
       ) : hasAuthenticatedEmptyState ? (
         <AppStateShell
@@ -356,8 +483,28 @@ export default function App() {
           detail={actionError.message}
           actionLabel="New Session"
           onAction={() => {
+            if (!defaultScenario) {
+              return;
+            }
+
             setHasAttemptedAutoCreate(true);
-            startNewSession(defaultSandboxScenarioId, defaultSandboxTemplateId);
+            startNewSession(defaultScenario.id);
+          }}
+        />
+      ) : hasOrphanedSessionState ? (
+        <AppStateShell
+          eyebrow="Workspace recovery"
+          title="Workspace unavailable"
+          body="Your last sandbox can no longer be attached. Start a fresh session."
+          detail={actionError?.message ?? currentSession.error}
+          actionLabel="New Session"
+          onAction={() => {
+            if (!defaultScenario) {
+              return;
+            }
+
+            setHasAttemptedAutoCreate(true);
+            startNewSession(defaultScenario.id);
           }}
         />
       ) : currentSession.status === "error" || actionError ? (

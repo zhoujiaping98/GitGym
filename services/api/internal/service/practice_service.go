@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -11,7 +12,17 @@ import (
 	"gitgym/services/api/internal/runner"
 )
 
-const practiceSessionTTL = 2 * time.Hour
+const (
+	practiceSessionTTL                = 2 * time.Hour
+	practiceSessionOrphanCleanupGrace = 10 * time.Minute
+	workspaceCleanupScheduleTimeout   = 5 * time.Second
+)
+
+const (
+	PracticeSessionStatusActive   = "active"
+	PracticeSessionStatusExpired  = "expired"
+	PracticeSessionStatusOrphaned = "orphaned"
+)
 
 var (
 	ErrInvalidPracticeSessionInput  = errors.New("invalid practice session input")
@@ -20,7 +31,10 @@ var (
 	ErrPracticeServiceConfiguration = errors.New("practice service configuration error")
 	ErrRunnerWorkspaceCreation      = errors.New("runner workspace creation failed")
 	ErrRunnerWorkspaceReset         = errors.New("runner workspace reset failed")
+	ErrRunnerTerminalUnavailable    = errors.New("runner terminal unavailable")
 	ErrPracticeSessionNotFound      = errors.New("practice session not found")
+	ErrPracticeSessionExpired       = errors.New("practice session expired")
+	ErrPracticeSessionOrphaned      = errors.New("practice session workspace is unavailable")
 )
 
 type PracticeTemplate struct {
@@ -30,10 +44,10 @@ type PracticeTemplate struct {
 }
 
 type PracticeScenario struct {
-	ID         uint64
-	Key        string
-	Name       string
-	TemplateID uint64
+	ID         uint64 `json:"id"`
+	Key        string `json:"key"`
+	Name       string `json:"name"`
+	TemplateID uint64 `json:"template_id"`
 }
 
 type CreatePracticeSessionInput struct {
@@ -46,66 +60,139 @@ type PracticeSessionStore interface {
 	CreatePracticeSession(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error)
 	CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error)
 	PracticeSessionByID(ctx context.Context, sessionID uint64) (domain.PracticeSession, error)
+	UpdatePracticeSession(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error)
+	ExpirePracticeSessions(ctx context.Context, before time.Time, endedAt time.Time) ([]domain.PracticeSession, error)
 }
 
 type PracticeService interface {
 	ListTemplates(ctx context.Context) []PracticeTemplate
+	ListScenarios(ctx context.Context) []PracticeScenario
+	ListTemplatesWithError(ctx context.Context) ([]PracticeTemplate, error)
+	ListScenariosWithError(ctx context.Context) ([]PracticeScenario, error)
 	CreatePracticeSession(ctx context.Context, input CreatePracticeSessionInput) (domain.PracticeSession, error)
 	ResetPracticeSession(ctx context.Context, userID uint64, sessionID uint64) error
 	CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error)
 	PracticeSessionByID(ctx context.Context, userID uint64, sessionID uint64) (domain.PracticeSession, error)
+	ConnectTerminal(ctx context.Context, userID uint64, sessionID uint64) (runner.TerminalConnection, error)
+	ExpireStalePracticeSessions(ctx context.Context) (int, error)
 }
 
 type practiceService struct {
 	store     PracticeSessionStore
 	runner    runner.Client
+	catalog   PracticeCatalog
 	now       func() time.Time
-	templates []PracticeTemplate
-	scenarios []PracticeScenario
+	cleanupMu sync.Mutex
+	cleanup   map[string]workspaceCleanupSchedule
 }
 
-func NewPracticeService(store PracticeSessionStore, runnerClient runner.Client, now func() time.Time) PracticeService {
+type workspaceCleanupSchedule struct {
+	session     domain.PracticeSession
+	reason      string
+	deleteAfter time.Duration
+}
+
+func NewPracticeService(store PracticeSessionStore, runnerClient runner.Client, options ...any) PracticeService {
+	var (
+		catalog PracticeCatalog
+		now     func() time.Time
+	)
+
+	for _, option := range options {
+		switch value := option.(type) {
+		case PracticeCatalog:
+			catalog = value
+		case func() time.Time:
+			now = value
+		}
+	}
+
 	if now == nil {
 		now = time.Now
 	}
+	if catalog == nil {
+		catalog = NewFallbackPracticeCatalog()
+	}
 
 	return &practiceService{
-		store:  store,
-		runner: runnerClient,
-		now:    now,
-		templates: []PracticeTemplate{
-			{ID: 1, Key: "standard", Name: "Standard"},
-		},
-		scenarios: []PracticeScenario{
-			{ID: 1, Key: "sandbox-standard", Name: "Standard Sandbox", TemplateID: 1},
-		},
+		store:   store,
+		runner:  runnerClient,
+		catalog: catalog,
+		now:     now,
+		cleanup: make(map[string]workspaceCleanupSchedule),
 	}
 }
 
-func (s *practiceService) ListTemplates(_ context.Context) []PracticeTemplate {
-	templates := make([]PracticeTemplate, len(s.templates))
-	copy(templates, s.templates)
+func (s *practiceService) ListTemplates(ctx context.Context) []PracticeTemplate {
+	templates, err := s.ListTemplatesWithError(ctx)
+	if err != nil {
+		return nil
+	}
+
 	return templates
 }
 
+func (s *practiceService) ListScenarios(ctx context.Context) []PracticeScenario {
+	scenarios, err := s.ListScenariosWithError(ctx)
+	if err != nil {
+		return nil
+	}
+
+	return scenarios
+}
+
+func (s *practiceService) ListTemplatesWithError(ctx context.Context) ([]PracticeTemplate, error) {
+	if s.catalog == nil {
+		return nil, fmt.Errorf("%w: practice catalog is not configured", ErrPracticeServiceConfiguration)
+	}
+
+	return s.catalog.ListTemplates(ctx)
+}
+
+func (s *practiceService) ListScenariosWithError(ctx context.Context) ([]PracticeScenario, error) {
+	if s.catalog == nil {
+		return nil, fmt.Errorf("%w: practice catalog is not configured", ErrPracticeServiceConfiguration)
+	}
+
+	return s.catalog.ListScenarios(ctx)
+}
+
 func (s *practiceService) CreatePracticeSession(ctx context.Context, input CreatePracticeSessionInput) (domain.PracticeSession, error) {
-	if input.UserID == 0 || input.ScenarioID == 0 || input.TemplateID == 0 {
+	if input.UserID == 0 || input.ScenarioID == 0 {
 		return domain.PracticeSession{}, fmt.Errorf("%w", ErrInvalidPracticeSessionInput)
 	}
-
-	if _, ok := s.scenarioByID(input.ScenarioID); !ok {
-		return domain.PracticeSession{}, fmt.Errorf("%w: %d", ErrUnknownPracticeScenario, input.ScenarioID)
-	}
-
-	template, ok := s.templateByID(input.TemplateID)
-	if !ok {
-		return domain.PracticeSession{}, fmt.Errorf("%w: %d", ErrUnknownPracticeTemplate, input.TemplateID)
+	if s.catalog == nil {
+		return domain.PracticeSession{}, fmt.Errorf("%w: practice catalog is not configured", ErrPracticeServiceConfiguration)
 	}
 	if s.runner == nil {
 		return domain.PracticeSession{}, fmt.Errorf("%w: runner client is not configured", ErrPracticeServiceConfiguration)
 	}
 	if s.store == nil {
 		return domain.PracticeSession{}, fmt.Errorf("%w: practice session store is not configured", ErrPracticeServiceConfiguration)
+	}
+
+	scenario, err := s.catalog.ScenarioByID(ctx, input.ScenarioID)
+	if err != nil {
+		return domain.PracticeSession{}, err
+	}
+
+	template, err := s.catalog.TemplateByID(ctx, scenario.TemplateID)
+	if err != nil {
+		return domain.PracticeSession{}, fmt.Errorf(
+			"%w: scenario %d references template %d",
+			ErrPracticeServiceConfiguration,
+			scenario.ID,
+			scenario.TemplateID,
+		)
+	}
+	if input.TemplateID != 0 && input.TemplateID != template.ID {
+		return domain.PracticeSession{}, fmt.Errorf(
+			"%w: scenario %d resolves to template %d, got %d",
+			ErrUnknownPracticeTemplate,
+			scenario.ID,
+			template.ID,
+			input.TemplateID,
+		)
 	}
 
 	workspace, err := s.runner.CreateWorkspace(ctx, template.Key)
@@ -119,11 +206,11 @@ func (s *practiceService) CreatePracticeSession(ctx context.Context, input Creat
 	now := s.now().UTC()
 	session := domain.PracticeSession{
 		UserID:           input.UserID,
-		ScenarioID:       input.ScenarioID,
-		TemplateID:       input.TemplateID,
+		ScenarioID:       scenario.ID,
+		TemplateID:       template.ID,
 		RunnerRef:        workspace.ID,
 		WorkspacePathRef: workspace.Path,
-		Status:           "active",
+		Status:           PracticeSessionStatusActive,
 		StartedAt:        now,
 		ExpiresAt:        now.Add(practiceSessionTTL),
 		LastActivityAt:   now,
@@ -152,6 +239,13 @@ func (s *practiceService) CurrentPracticeSession(ctx context.Context, userID uin
 	if session.UserID != userID {
 		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionNotFound)
 	}
+	session, err = s.ensureSessionAvailable(ctx, session)
+	if err != nil {
+		if errors.Is(err, ErrPracticeSessionExpired) {
+			return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionNotFound)
+		}
+		return domain.PracticeSession{}, err
+	}
 	return session, nil
 }
 
@@ -169,6 +263,14 @@ func (s *practiceService) ResetPracticeSession(ctx context.Context, userID uint6
 	}
 
 	if err := s.runner.ResetWorkspace(ctx, session.RunnerRef); err != nil {
+		if errors.Is(err, runner.ErrWorkspaceNotFound) {
+			updated, transitionErr := s.transitionSession(ctx, session, PracticeSessionStatusOrphaned)
+			if transitionErr != nil {
+				return transitionErr
+			}
+			_ = s.scheduleWorkspaceCleanup(ctx, updated, PracticeSessionStatusOrphaned, practiceSessionOrphanCleanupGrace)
+			return fmt.Errorf("%w", ErrPracticeSessionOrphaned)
+		}
 		if errors.Is(err, runner.ErrClientNotConfigured) {
 			return fmt.Errorf("%w: %v", ErrPracticeServiceConfiguration, err)
 		}
@@ -193,25 +295,191 @@ func (s *practiceService) PracticeSessionByID(ctx context.Context, userID uint64
 	if session.UserID != userID {
 		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionNotFound)
 	}
+	return s.ensureSessionAvailable(ctx, session)
+}
+
+func (s *practiceService) ConnectTerminal(ctx context.Context, userID uint64, sessionID uint64) (runner.TerminalConnection, error) {
+	if s.runner == nil {
+		return nil, fmt.Errorf("%w: runner client is not configured", ErrPracticeServiceConfiguration)
+	}
+
+	session, err := s.PracticeSessionByID(ctx, userID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := s.runner.ConnectTerminal(ctx, session.RunnerRef)
+	if err != nil {
+		if errors.Is(err, runner.ErrWorkspaceNotFound) {
+			updated, transitionErr := s.transitionSession(ctx, session, PracticeSessionStatusOrphaned)
+			if transitionErr != nil {
+				return nil, transitionErr
+			}
+			_ = s.scheduleWorkspaceCleanup(ctx, updated, PracticeSessionStatusOrphaned, practiceSessionOrphanCleanupGrace)
+			return nil, fmt.Errorf("%w", ErrPracticeSessionOrphaned)
+		}
+		if errors.Is(err, runner.ErrClientNotConfigured) {
+			return nil, fmt.Errorf("%w: %v", ErrPracticeServiceConfiguration, err)
+		}
+		return nil, fmt.Errorf("%w: %v", ErrRunnerTerminalUnavailable, err)
+	}
+
+	return conn, nil
+}
+
+func (s *practiceService) ExpireStalePracticeSessions(ctx context.Context) (int, error) {
+	if s.store == nil {
+		return 0, fmt.Errorf("%w: practice session store is not configured", ErrPracticeServiceConfiguration)
+	}
+
+	s.retryPendingWorkspaceCleanups(ctx)
+
+	now := s.now().UTC()
+	expiredSessions, err := s.store.ExpirePracticeSessions(ctx, now, now)
+	if err != nil {
+		return 0, fmt.Errorf("expire stale practice sessions: %w", err)
+	}
+
+	for _, session := range expiredSessions {
+		_ = s.scheduleWorkspaceCleanup(ctx, session, PracticeSessionStatusExpired, 0)
+	}
+
+	return len(expiredSessions), nil
+}
+
+func (s *practiceService) ensureSessionAvailable(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error) {
+	switch session.Status {
+	case PracticeSessionStatusExpired:
+		s.retryPendingWorkspaceCleanup(ctx, session)
+		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionExpired)
+	case PracticeSessionStatusOrphaned:
+		s.retryPendingWorkspaceCleanup(ctx, session)
+		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionOrphaned)
+	}
+
+	if !session.ExpiresAt.After(s.now().UTC()) {
+		updated, err := s.transitionSession(ctx, session, PracticeSessionStatusExpired)
+		if err != nil {
+			return domain.PracticeSession{}, err
+		}
+		_ = s.scheduleWorkspaceCleanup(ctx, updated, PracticeSessionStatusExpired, 0)
+		return domain.PracticeSession{}, fmt.Errorf("%w: %d", ErrPracticeSessionExpired, updated.ID)
+	}
+
 	return session, nil
 }
 
-func (s *practiceService) templateByID(templateID uint64) (PracticeTemplate, bool) {
-	for _, template := range s.templates {
-		if template.ID == templateID {
-			return template, true
-		}
+func (s *practiceService) transitionSession(ctx context.Context, session domain.PracticeSession, status string) (domain.PracticeSession, error) {
+	if s.store == nil {
+		return domain.PracticeSession{}, fmt.Errorf("%w: practice session store is not configured", ErrPracticeServiceConfiguration)
 	}
-	return PracticeTemplate{}, false
+
+	now := s.now().UTC()
+	session.Status = status
+	session.LastActivityAt = now
+	if session.EndedAt == nil {
+		session.EndedAt = &now
+	}
+
+	updated, err := s.store.UpdatePracticeSession(ctx, session)
+	if err != nil {
+		return domain.PracticeSession{}, fmt.Errorf("update practice session lifecycle: %w", err)
+	}
+
+	return updated, nil
 }
 
-func (s *practiceService) scenarioByID(scenarioID uint64) (PracticeScenario, bool) {
-	for _, scenario := range s.scenarios {
-		if scenario.ID == scenarioID {
-			return scenario, true
-		}
+func (s *practiceService) scheduleWorkspaceCleanup(ctx context.Context, session domain.PracticeSession, reason string, deleteAfter time.Duration) error {
+	if s.runner == nil {
+		return fmt.Errorf("%w: runner client is not configured", ErrPracticeServiceConfiguration)
 	}
-	return PracticeScenario{}, false
+
+	cleanupCtx, cancel := detachedCleanupSchedulingContext(ctx)
+	defer cancel()
+
+	if err := s.runner.DeleteWorkspace(cleanupCtx, session.RunnerRef, reason, deleteAfter); err != nil && !errors.Is(err, runner.ErrWorkspaceNotFound) {
+		s.rememberWorkspaceCleanupFailure(session, reason, deleteAfter, err)
+		return err
+	}
+	s.clearWorkspaceCleanupFailure(session.RunnerRef)
+
+	return nil
+}
+
+func detachedCleanupSchedulingContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+
+	return context.WithTimeout(context.WithoutCancel(parent), workspaceCleanupScheduleTimeout)
+}
+
+func (s *practiceService) retryPendingWorkspaceCleanups(ctx context.Context) {
+	for _, pending := range s.pendingWorkspaceCleanups() {
+		_ = s.scheduleWorkspaceCleanup(ctx, pending.session, pending.reason, pending.deleteAfter)
+	}
+}
+
+func (s *practiceService) retryPendingWorkspaceCleanup(ctx context.Context, session domain.PracticeSession) {
+	pending, ok := s.pendingWorkspaceCleanup(session.RunnerRef)
+	if !ok {
+		return
+	}
+
+	_ = s.scheduleWorkspaceCleanup(ctx, pending.session, pending.reason, pending.deleteAfter)
+}
+
+func (s *practiceService) pendingWorkspaceCleanups() []workspaceCleanupSchedule {
+	s.cleanupMu.Lock()
+	defer s.cleanupMu.Unlock()
+
+	if len(s.cleanup) == 0 {
+		return nil
+	}
+
+	pending := make([]workspaceCleanupSchedule, 0, len(s.cleanup))
+	for _, entry := range s.cleanup {
+		pending = append(pending, entry)
+	}
+	return pending
+}
+
+func (s *practiceService) pendingWorkspaceCleanup(workspaceID string) (workspaceCleanupSchedule, bool) {
+	s.cleanupMu.Lock()
+	defer s.cleanupMu.Unlock()
+
+	entry, ok := s.cleanup[workspaceID]
+	return entry, ok
+}
+
+func (s *practiceService) rememberWorkspaceCleanupFailure(session domain.PracticeSession, reason string, deleteAfter time.Duration, err error) {
+	log.Printf(
+		"practice session cleanup scheduling failed for session %d workspace %q reason=%s delay=%s: %v",
+		session.ID,
+		session.RunnerRef,
+		reason,
+		deleteAfter,
+		err,
+	)
+
+	s.cleanupMu.Lock()
+	defer s.cleanupMu.Unlock()
+
+	if s.cleanup == nil {
+		s.cleanup = make(map[string]workspaceCleanupSchedule)
+	}
+	s.cleanup[session.RunnerRef] = workspaceCleanupSchedule{
+		session:     session,
+		reason:      reason,
+		deleteAfter: deleteAfter,
+	}
+}
+
+func (s *practiceService) clearWorkspaceCleanupFailure(workspaceID string) {
+	s.cleanupMu.Lock()
+	defer s.cleanupMu.Unlock()
+
+	delete(s.cleanup, workspaceID)
 }
 
 type InMemoryPracticeSessionStore struct {
@@ -265,4 +533,42 @@ func (s *InMemoryPracticeSessionStore) PracticeSessionByID(_ context.Context, se
 		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionNotFound)
 	}
 	return session, nil
+}
+
+func (s *InMemoryPracticeSessionStore) UpdatePracticeSession(_ context.Context, session domain.PracticeSession) (domain.PracticeSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.sessions[session.ID]; !ok {
+		return domain.PracticeSession{}, fmt.Errorf("%w", ErrPracticeSessionNotFound)
+	}
+
+	s.sessions[session.ID] = session
+	if currentID, ok := s.currentByUser[session.UserID]; !ok || currentID == session.ID || session.Status == PracticeSessionStatusActive {
+		s.currentByUser[session.UserID] = session.ID
+	}
+
+	return session, nil
+}
+
+func (s *InMemoryPracticeSessionStore) ExpirePracticeSessions(_ context.Context, before time.Time, endedAt time.Time) ([]domain.PracticeSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var expired []domain.PracticeSession
+	for id, session := range s.sessions {
+		if session.Status != PracticeSessionStatusActive || session.ExpiresAt.After(before) {
+			continue
+		}
+
+		session.Status = PracticeSessionStatusExpired
+		session.LastActivityAt = endedAt
+		if session.EndedAt == nil {
+			session.EndedAt = &endedAt
+		}
+		s.sessions[id] = session
+		expired = append(expired, session)
+	}
+
+	return expired, nil
 }

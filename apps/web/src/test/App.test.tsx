@@ -1,15 +1,16 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import * as api from "../lib/api";
-import type { TerminalSessionState } from "../types";
+import type { PracticeCatalog, TerminalSessionState } from "../types";
 
 const mockUseCurrentSession = vi.fn();
 const mockUseTerminalSession = vi.fn();
 const mockCreatePracticeSession = vi.spyOn(api, "createPracticeSession");
 const mockResetPracticeSession = vi.spyOn(api, "resetPracticeSession");
 const mockLogout = vi.spyOn(api, "logout");
+const mockFetch = vi.fn();
 const mockFitAddonFit = vi.fn();
 const mockTerminalDispose = vi.fn();
 const mockTerminalFocus = vi.fn();
@@ -126,6 +127,45 @@ const mismatchedSession = {
   lastActivityAt: "2026-05-16T10:20:00.000Z",
 } as const;
 
+const defaultCatalog: PracticeCatalog = {
+  templates: [{ id: 1, key: "standard", name: "Standard" }],
+  scenarios: [
+    {
+      id: 1,
+      key: "sandbox-standard",
+      name: "Standard Sandbox",
+      templateId: 1,
+    },
+  ],
+};
+
+function createCatalogResponse(
+  catalog: {
+    templates: Array<{ id: number; key: string; name: string }>;
+    scenarios: Array<{
+      id: number;
+      key: string;
+      name: string;
+      template_id: number;
+    }>;
+  } = {
+    templates: defaultCatalog.templates,
+    scenarios: defaultCatalog.scenarios.map((scenario) => ({
+      id: scenario.id,
+      key: scenario.key,
+      name: scenario.name,
+      template_id: scenario.templateId,
+    })),
+  },
+) {
+  return Promise.resolve(
+    new Response(JSON.stringify(catalog), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
+
 function createTerminalState(
   overrides: Partial<TerminalSessionState> = {},
 ): TerminalSessionState {
@@ -158,6 +198,12 @@ function flushAnimationFrame(timestamp = 16) {
   const callback = scheduledAnimationFrameCallback;
   scheduledAnimationFrameCallback = null;
   callback?.(timestamp);
+}
+
+async function waitForNewSessionAction() {
+  await waitFor(() => {
+    expect(screen.getByRole("button", { name: "New Session" })).toBeEnabled();
+  });
 }
 
 beforeEach(() => {
@@ -202,6 +248,15 @@ beforeEach(() => {
     }),
   );
   vi.stubGlobal("cancelAnimationFrame", mockCancelAnimationFrame);
+  vi.stubGlobal("fetch", mockFetch);
+  mockFetch.mockReset();
+  mockFetch.mockImplementation((input: RequestInfo | URL) => {
+    if (String(input).endsWith("/api/v1/templates")) {
+      return createCatalogResponse();
+    }
+
+    throw new Error(`Unexpected fetch request: ${String(input)}`);
+  });
 
   mockUseCurrentSession.mockReturnValue({
     status: "ready",
@@ -255,16 +310,12 @@ describe("App", () => {
 
     expect(screen.getByText("Signed in")).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Preparing your workspace" }),
-    ).toBeInTheDocument();
-    expect(
       screen.queryByRole("link", { name: "Continue with GitHub" }),
     ).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(mockCreatePracticeSession).toHaveBeenCalledWith({
         scenarioId: 1,
-        templateId: 1,
       });
     });
 
@@ -294,6 +345,154 @@ describe("App", () => {
     });
 
     expect(screen.getByText("create failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
+  });
+
+  it("waits for catalog before auto-creating a session", async () => {
+    let resolveCatalog: ((value: Response) => void) | null = null;
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: null,
+      absenceReason: "missing",
+      error: null,
+      refresh: vi.fn().mockResolvedValue(nextSession),
+    });
+
+    mockFetch.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveCatalog = resolve;
+        }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/v1/templates",
+        expect.objectContaining({
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        }),
+      );
+    });
+    expect(mockCreatePracticeSession).not.toHaveBeenCalled();
+
+    resolveCatalog?.(
+      new Response(
+        JSON.stringify({
+          templates: [{ id: 1, key: "standard", name: "Standard" }],
+          scenarios: [
+            {
+              id: 1,
+              key: "sandbox-standard",
+              name: "Standard Sandbox",
+              template_id: 1,
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await waitFor(() => {
+      expect(mockCreatePracticeSession).toHaveBeenCalledWith({
+        scenarioId: 1,
+      });
+    });
+  });
+
+  it("renders a dedicated catalog-unavailable state when catalog loading fails", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: null,
+      absenceReason: "missing",
+      error: null,
+      refresh: vi.fn().mockResolvedValue(null),
+    });
+
+    mockFetch.mockImplementationOnce(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: "catalog offline" }), {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Practice catalog unavailable" }),
+      ).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("catalog offline")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(mockCreatePracticeSession).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("heading", { name: "Session unavailable" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("blocks session creation when the catalog has no scenarios", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: null,
+      absenceReason: "missing",
+      error: null,
+      refresh: vi.fn().mockResolvedValue(null),
+    });
+
+    mockFetch.mockImplementationOnce(() =>
+      createCatalogResponse({
+        templates: [{ id: 1, key: "standard", name: "Standard" }],
+        scenarios: [],
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Practice catalog empty" }),
+      ).toBeInTheDocument();
+    });
+
+    expect(
+      screen.getByText("There are no practice scenarios available for this environment."),
+    ).toBeInTheDocument();
+    expect(mockCreatePracticeSession).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "New Session" })).not.toBeInTheDocument();
+  });
+
+  it("shows a workspace recovery state when the current session is orphaned", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: null,
+      absenceReason: "orphaned",
+      error: "practice session workspace is unavailable",
+      refresh: vi.fn().mockResolvedValue(null),
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Workspace unavailable" }),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText("Your last sandbox can no longer be attached. Start a fresh session."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("practice session workspace is unavailable"),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
   });
 
@@ -389,12 +588,12 @@ describe("App", () => {
     expect(screen.getByText("runner-42")).toBeInTheDocument();
     expect(screen.getByText("git status")).toBeInTheDocument();
 
+    await waitForNewSessionAction();
     fireEvent.click(screen.getByRole("button", { name: "New Session" }));
 
     await waitFor(() => {
       expect(mockCreatePracticeSession).toHaveBeenCalledWith({
         scenarioId: 1,
-        templateId: 1,
       });
     });
     await waitFor(() => {
@@ -498,6 +697,57 @@ describe("App", () => {
     expect(mockResetPracticeSession).not.toHaveBeenCalled();
   });
 
+  it("refreshes the current session once when the live terminal becomes unavailable", async () => {
+    const refresh = vi.fn().mockResolvedValue(activeSession);
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh,
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "unavailable",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        error: "Terminal transport is unavailable for this session.",
+      }),
+    );
+
+    const { rerender } = render(<App />);
+
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    rerender(<App />);
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+    rerender(<App />);
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "unavailable",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        error: "Terminal transport is unavailable for this session.",
+      }),
+    );
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(refresh).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("does not render the terminal empty-state copy while the live shell is ready", () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
@@ -542,6 +792,7 @@ describe("App", () => {
 
     render(<App />);
 
+    await waitForNewSessionAction();
     fireEvent.click(screen.getByRole("button", { name: "New Session" }));
 
     await waitFor(() => {
@@ -580,6 +831,7 @@ describe("App", () => {
 
     render(<App />);
 
+    await waitForNewSessionAction();
     fireEvent.click(screen.getByRole("button", { name: "New Session" }));
 
     await waitFor(() => {
@@ -613,6 +865,7 @@ describe("App", () => {
 
     render(<App />);
 
+    await waitForNewSessionAction();
     fireEvent.click(screen.getByRole("button", { name: "New Session" }));
 
     await waitFor(() => {
@@ -889,6 +1142,7 @@ describe("App", () => {
 
     const firstMount = await screen.findByTestId("live-terminal");
 
+    await waitForNewSessionAction();
     fireEvent.click(screen.getByRole("button", { name: "New Session" }));
 
     await waitFor(() => {
@@ -931,8 +1185,10 @@ describe("App", () => {
 
       expect(mockTerminalInstances).toHaveLength(0);
 
-      vi.runOnlyPendingTimers();
-      await Promise.resolve();
+      await act(async () => {
+        vi.runOnlyPendingTimers();
+        await Promise.resolve();
+      });
 
       expect(mockTerminalInstances).toHaveLength(1);
     } finally {

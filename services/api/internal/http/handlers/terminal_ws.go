@@ -15,7 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func PracticeTerminalWebsocket(practiceService service.PracticeService, runnerClient runner.Client, frontendRedirectURL string) http.HandlerFunc {
+func PracticeTerminalWebsocket(practiceService service.PracticeService, _ runner.Client, frontendRedirectURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authenticatedSession, ok := middleware.AuthenticatedSessionFromContext(r.Context())
 		if !ok || authenticatedSession.UserID == 0 {
@@ -33,32 +33,21 @@ func PracticeTerminalWebsocket(practiceService service.PracticeService, runnerCl
 			return
 		}
 
-		session, err := practiceService.PracticeSessionByID(r.Context(), authenticatedSession.UserID, sessionID)
+		runnerConn, err := practiceService.ConnectTerminal(r.Context(), authenticatedSession.UserID, sessionID)
 		if err != nil {
-			writeJSON(w, statusForPracticeSessionLookupError(err), map[string]any{
+			writeJSON(w, statusForPracticeSessionMutationError(err), map[string]any{
 				"error": err.Error(),
-			})
-			return
-		}
-		if runnerClient == nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{
-				"error": "runner client is not configured",
 			})
 			return
 		}
 
 		browserSocket, err := websocket.Accept(w, r, terminalAcceptOptions(frontendRedirectURL))
 		if err != nil {
+			_ = runnerConn.Close(websocket.StatusNormalClosure, "")
 			return
 		}
 		browserConn := websocketTerminalConnection{conn: browserSocket}
 		defer browserConn.Close(websocket.StatusNormalClosure, "")
-
-		runnerConn, err := runnerClient.ConnectTerminal(r.Context(), session.RunnerRef)
-		if err != nil {
-			_ = browserConn.Close(websocket.StatusInternalError, "runner terminal unavailable")
-			return
-		}
 		defer runnerConn.Close(websocket.StatusNormalClosure, "")
 
 		bridgeCtx, cancel := context.WithCancel(r.Context())

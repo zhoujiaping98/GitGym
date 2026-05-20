@@ -66,7 +66,7 @@ SELECT
   expires_at,
   last_activity_at
 FROM practice_sessions
-WHERE user_id = ? AND status = 'active'
+WHERE user_id = ?
 ORDER BY started_at DESC, id DESC
 LIMIT 1
 `
@@ -86,6 +86,44 @@ SELECT
 FROM practice_sessions
 WHERE id = ?
 LIMIT 1
+`
+	updatePracticeSessionQuery = `
+UPDATE practice_sessions
+SET status = ?, ended_at = ?, last_activity_at = ?
+WHERE id = ?
+`
+	expirePracticeSessionsQuery = `
+UPDATE practice_sessions
+SET status = ?, ended_at = COALESCE(ended_at, ?), last_activity_at = ?
+WHERE status = ? AND expires_at <= ?
+`
+	expiredPracticeSessionsLookupQuery = `
+SELECT
+  id,
+  user_id,
+  scenario_id,
+  template_id,
+  runner_ref,
+  workspace_path_ref,
+  status,
+  started_at,
+  ended_at,
+  expires_at,
+  last_activity_at
+FROM practice_sessions
+WHERE status = ? AND ended_at = ? AND last_activity_at = ?
+`
+	listPracticeTemplatesQuery = `
+SELECT id, template_key, name
+FROM workspace_templates
+WHERE is_active = 1
+ORDER BY id ASC
+`
+	listPracticeScenariosQuery = `
+SELECT id, scenario_key, name, template_id
+FROM scenarios
+WHERE is_active = 1
+ORDER BY id ASC
 `
 )
 
@@ -224,6 +262,113 @@ func (s *MySQLStore) PracticeSessionByID(ctx context.Context, sessionID uint64) 
 	return scanPracticeSession(row)
 }
 
+func (s *MySQLStore) UpdatePracticeSession(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		updatePracticeSessionQuery,
+		session.Status,
+		session.EndedAt,
+		session.LastActivityAt,
+		session.ID,
+	)
+	if err != nil {
+		return domain.PracticeSession{}, fmt.Errorf("update practice session: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return domain.PracticeSession{}, fmt.Errorf("update practice session rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return domain.PracticeSession{}, service.ErrPracticeSessionNotFound
+	}
+
+	return session, nil
+}
+
+func (s *MySQLStore) ExpirePracticeSessions(ctx context.Context, before time.Time, endedAt time.Time) ([]domain.PracticeSession, error) {
+	if _, err := s.db.ExecContext(
+		ctx,
+		expirePracticeSessionsQuery,
+		service.PracticeSessionStatusExpired,
+		endedAt,
+		endedAt,
+		service.PracticeSessionStatusActive,
+		before,
+	); err != nil {
+		return nil, fmt.Errorf("expire practice sessions: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		expiredPracticeSessionsLookupQuery,
+		service.PracticeSessionStatusExpired,
+		endedAt,
+		endedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query expired practice sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []domain.PracticeSession
+	for rows.Next() {
+		session, err := scanPracticeSessionRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate expired practice sessions: %w", err)
+	}
+
+	return sessions, nil
+}
+
+func (s *MySQLStore) ListPracticeTemplates(ctx context.Context) ([]service.PracticeTemplate, error) {
+	rows, err := s.db.QueryContext(ctx, listPracticeTemplatesQuery)
+	if err != nil {
+		return nil, fmt.Errorf("list practice templates: %w", err)
+	}
+	defer rows.Close()
+
+	var templates []service.PracticeTemplate
+	for rows.Next() {
+		var template service.PracticeTemplate
+		if err := rows.Scan(&template.ID, &template.Key, &template.Name); err != nil {
+			return nil, fmt.Errorf("scan practice template: %w", err)
+		}
+		templates = append(templates, template)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate practice templates: %w", err)
+	}
+
+	return templates, nil
+}
+
+func (s *MySQLStore) ListPracticeScenarios(ctx context.Context) ([]service.PracticeScenario, error) {
+	rows, err := s.db.QueryContext(ctx, listPracticeScenariosQuery)
+	if err != nil {
+		return nil, fmt.Errorf("list practice scenarios: %w", err)
+	}
+	defer rows.Close()
+
+	var scenarios []service.PracticeScenario
+	for rows.Next() {
+		var scenario service.PracticeScenario
+		if err := rows.Scan(&scenario.ID, &scenario.Key, &scenario.Name, &scenario.TemplateID); err != nil {
+			return nil, fmt.Errorf("scan practice scenario: %w", err)
+		}
+		scenarios = append(scenarios, scenario)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate practice scenarios: %w", err)
+	}
+
+	return scenarios, nil
+}
+
 func NormalizeMySQLDSN(dsn string) (string, error) {
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
@@ -299,12 +444,40 @@ func mapBrowserSessionLookupError(err error) error {
 }
 
 func scanPracticeSession(row *sql.Row) (domain.PracticeSession, error) {
+	if row == nil {
+		return domain.PracticeSession{}, fmt.Errorf("scan practice session: nil row")
+	}
+
+	session, err := scanPracticeSessionScanner(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return domain.PracticeSession{}, service.ErrPracticeSessionNotFound
+		}
+		return domain.PracticeSession{}, fmt.Errorf("scan practice session: %w", err)
+	}
+
+	return session, nil
+}
+
+type practiceSessionScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanPracticeSessionRows(rows *sql.Rows) (domain.PracticeSession, error) {
+	session, err := scanPracticeSessionScanner(rows)
+	if err != nil {
+		return domain.PracticeSession{}, fmt.Errorf("scan practice session rows: %w", err)
+	}
+	return session, nil
+}
+
+func scanPracticeSessionScanner(scanner practiceSessionScanner) (domain.PracticeSession, error) {
 	var (
 		session domain.PracticeSession
 		endedAt sql.NullTime
 	)
 
-	if err := row.Scan(
+	if err := scanner.Scan(
 		&session.ID,
 		&session.UserID,
 		&session.ScenarioID,
@@ -317,10 +490,7 @@ func scanPracticeSession(row *sql.Row) (domain.PracticeSession, error) {
 		&session.ExpiresAt,
 		&session.LastActivityAt,
 	); err != nil {
-		if err == sql.ErrNoRows {
-			return domain.PracticeSession{}, service.ErrPracticeSessionNotFound
-		}
-		return domain.PracticeSession{}, fmt.Errorf("scan practice session: %w", err)
+		return domain.PracticeSession{}, err
 	}
 
 	session.EndedAt = nullTimePtr(endedAt)
