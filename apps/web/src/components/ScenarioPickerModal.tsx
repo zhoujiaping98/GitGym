@@ -1,3 +1,5 @@
+import { useEffect, useId, useRef } from "react";
+
 type ScenarioPickerOption = {
   id: number;
   name: string;
@@ -32,6 +34,52 @@ export function ScenarioPickerModal({
   onConfirm,
   onClose,
 }: ScenarioPickerModalProps) {
+  const titleId = useId();
+  const bodyId = useId();
+  const errorId = useId();
+  const listboxId = useId();
+  const selectedOptionId =
+    selectedScenarioId === null ? undefined : `${listboxId}-option-${selectedScenarioId}`;
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      previouslyFocusedElementRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      window.requestAnimationFrame(() => {
+        if (!dialogRef.current) {
+          return;
+        }
+
+        const selectedOption = dialogRef.current.querySelector<HTMLElement>(
+          '[role="option"][aria-selected="true"]',
+        );
+        (selectedOption ?? dialogRef.current).focus();
+      });
+      return;
+    }
+
+    previouslyFocusedElementRef.current?.focus();
+    previouslyFocusedElementRef.current = null;
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !pending) {
+        event.preventDefault();
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, open, pending]);
+
   if (!open) {
     return null;
   }
@@ -39,24 +87,38 @@ export function ScenarioPickerModal({
   return (
     <div className="scenario-picker-backdrop" role="presentation">
       <section
-        aria-labelledby="scenario-picker-title"
+        aria-describedby={error ? `${bodyId} ${errorId}` : bodyId}
+        aria-labelledby={titleId}
         aria-modal="true"
         className="scenario-picker-modal"
+        ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
       >
         <header>
           <span className="preview-label">Scenario picker</span>
-          <h2 id="scenario-picker-title">{title}</h2>
-          <p>{body}</p>
+          <h2 id={titleId}>{title}</h2>
+          <p id={bodyId}>{body}</p>
         </header>
-        <div className="scenario-picker-list" role="listbox" aria-label="Practice scenarios">
-          {scenarios.map((scenario) => (
+        <div
+          aria-activedescendant={selectedOptionId}
+          aria-label="Practice scenarios"
+          className="scenario-picker-list"
+          id={listboxId}
+          role="listbox"
+        >
+          {scenarios.map((scenario, index) => (
             <button
               key={scenario.id}
+              id={`${listboxId}-option-${scenario.id}`}
               aria-selected={selectedScenarioId === scenario.id}
+              aria-setsize={scenarios.length}
+              aria-posinset={index + 1}
               className="scenario-picker-option"
               data-selected={selectedScenarioId === scenario.id}
               onClick={() => onSelect(scenario.id)}
+              role="option"
+              tabIndex={selectedScenarioId === scenario.id ? 0 : -1}
               type="button"
             >
               <strong>{scenario.name}</strong>
@@ -65,7 +127,17 @@ export function ScenarioPickerModal({
             </button>
           ))}
         </div>
-        {error ? <div className="session-state-detail">{error}</div> : null}
+        {error ? (
+          <div
+            aria-atomic="true"
+            aria-live="assertive"
+            className="session-state-detail"
+            id={errorId}
+            role="alert"
+          >
+            {error}
+          </div>
+        ) : null}
         <div className="scenario-picker-actions">
           <button className="top-bar-button" disabled={pending} onClick={onClose} type="button">
             Cancel
