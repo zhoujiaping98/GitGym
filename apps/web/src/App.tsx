@@ -141,6 +141,10 @@ export default function App() {
     shouldShowCatalogState &&
     catalogState.status === "ready" &&
     defaultScenario === null;
+  const shouldShowPassiveEmptyState =
+    hasAuthenticatedEmptyState &&
+    !actionError &&
+    !(hasAttemptedAutoCreate && scenarioPickerState.status === "closed");
 
   useEffect(() => {
     if (
@@ -528,7 +532,7 @@ export default function App() {
           body="There are no practice scenarios available for this environment."
           detail="Ask an administrator to publish at least one scenario before creating a session."
         />
-      ) : hasAuthenticatedEmptyState && !actionError ? (
+      ) : shouldShowPassiveEmptyState ? (
         <AppStateShell
           eyebrow="Workspace ready"
           title="Preparing your workspace"
@@ -540,7 +544,7 @@ export default function App() {
           eyebrow="Workspace ready"
           title="Create your first practice session"
           body="Your GitHub login is active. Start a disposable sandbox before you try the command sequence."
-          detail={actionError.message}
+          detail={actionError?.message ?? null}
           actionLabel="New Session"
           onAction={() => {
             setHasAttemptedAutoCreate(true);

@@ -348,6 +348,37 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
   });
 
+  it("shows a recoverable manual create state after dismissing the auto-opened picker", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: null,
+      absenceReason: "missing",
+      error: null,
+      refresh: vi.fn().mockResolvedValue(null),
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("dialog", { name: "Choose a practice scenario" }),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Create your first practice session" }),
+      ).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole("button", { name: "New Session" })).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "Preparing your workspace" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("waits for catalog before auto-creating a session", async () => {
     let resolveCatalog: ((value: Response) => void) | null = null;
 
