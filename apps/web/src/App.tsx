@@ -141,6 +141,12 @@ export default function App() {
     shouldShowCatalogState &&
     catalogState.status === "ready" &&
     defaultScenario === null;
+  const canUseScenarioPicker =
+    !signedOutOverride &&
+    currentSession.status === "ready" &&
+    currentSession.absenceReason !== "unauthenticated" &&
+    catalogState.status === "ready" &&
+    defaultScenario !== null;
   const shouldShowPassiveEmptyState =
     hasAuthenticatedEmptyState &&
     !actionError &&
@@ -228,6 +234,14 @@ export default function App() {
     unavailableRefreshSessionIdRef.current = displayedSession.id;
     void currentSession.refresh().catch(() => undefined);
   }, [currentSession, displayedSession, terminalSession.status]);
+
+  useEffect(() => {
+    if (scenarioPickerState.status !== "open" || canUseScenarioPicker) {
+      return;
+    }
+
+    setScenarioPickerState({ status: "closed" });
+  }, [canUseScenarioPicker, scenarioPickerState.status]);
 
   async function reconcileSessionAction(
     action: "reset" | "new-session",
@@ -323,7 +337,7 @@ export default function App() {
   }
 
   function openScenarioPicker(source: ScenarioPickerSource) {
-    if (catalogState.status !== "ready" || !defaultScenario) {
+    if (!canUseScenarioPicker) {
       return;
     }
 
@@ -353,7 +367,15 @@ export default function App() {
   }
 
   function confirmScenarioPicker() {
-    if (scenarioPickerState.status !== "open" || scenarioPickerState.selectedScenarioId === null) {
+    if (
+      scenarioPickerState.status !== "open" ||
+      scenarioPickerState.selectedScenarioId === null ||
+      !canUseScenarioPicker ||
+      !scenarioOptions.some((scenario) => scenario.id === scenarioPickerState.selectedScenarioId)
+    ) {
+      if (scenarioPickerState.status === "open" && !canUseScenarioPicker) {
+        setScenarioPickerState({ status: "closed" });
+      }
       return;
     }
 

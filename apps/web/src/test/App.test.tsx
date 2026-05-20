@@ -666,6 +666,46 @@ describe("App", () => {
     expect(mockCreatePracticeSession).not.toHaveBeenCalled();
   });
 
+  it("closes the scenario picker when the app becomes unauthenticated", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const { rerender } = render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "New Session" })).toBeEnabled();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    expect(
+      screen.getByRole("dialog", { name: "Choose a practice scenario" }),
+    ).toBeInTheDocument();
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: null,
+      absenceReason: "unauthenticated",
+      error: null,
+      refresh: vi.fn().mockResolvedValue(null),
+    });
+
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Choose a practice scenario" }),
+      ).not.toBeInTheDocument();
+    });
+
+    expect(mockCreatePracticeSession).not.toHaveBeenCalled();
+  });
+
   it("shows a logout action for authenticated users and returns to the login screen after logout", async () => {
     let resolveLogout: (() => void) | null = null;
     const refresh = vi
