@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { LoginScreen } from "./components/LoginScreen";
+import { ScenarioPickerModal } from "./components/ScenarioPickerModal";
 import { TopBar } from "./components/TopBar";
 import { Workbench } from "./components/Workbench";
 import { useCurrentSession } from "./hooks/useCurrentSession";
@@ -50,6 +51,17 @@ type CatalogState =
   | { status: "ready"; catalog: PracticeCatalog; error: null }
   | { status: "error"; catalog: null; error: string };
 
+type ScenarioPickerSource = "topbar" | "empty" | "orphaned";
+
+type ScenarioPickerState =
+  | { status: "closed" }
+  | {
+      status: "open";
+      source: ScenarioPickerSource;
+      selectedScenarioId: number | null;
+      error: string | null;
+    };
+
 function AppStateShell({
   eyebrow,
   title,
@@ -88,6 +100,9 @@ export default function App() {
     catalog: null,
     error: null,
   });
+  const [scenarioPickerState, setScenarioPickerState] = useState<ScenarioPickerState>({
+    status: "closed",
+  });
   const unavailableRefreshSessionIdRef = useRef<number | null>(null);
   const effectiveSession = signedOutOverride ? null : currentSession.session;
   const displayedSession = sessionOverride ?? effectiveSession;
@@ -111,6 +126,16 @@ export default function App() {
     currentSession.absenceReason !== "unauthenticated";
   const catalog = catalogState.status === "ready" ? catalogState.catalog : null;
   const defaultScenario = catalog?.scenarios[0] ?? null;
+  const scenarioOptions =
+    catalog?.scenarios.map((scenario) => {
+      const template = catalog.templates.find((entry) => entry.id === scenario.templateId);
+      return {
+        id: scenario.id,
+        name: scenario.name,
+        key: scenario.key,
+        templateName: template?.name ?? `Template #${scenario.templateId}`,
+      };
+    }) ?? [];
   const hasEmptyCatalogState =
     !hasActiveSession &&
     shouldShowCatalogState &&
@@ -176,7 +201,7 @@ export default function App() {
     }
 
     setHasAttemptedAutoCreate(true);
-    startNewSession(defaultScenario.id);
+    openScenarioPicker("empty");
   }, [
     actionError,
     catalogState.status,
@@ -293,15 +318,48 @@ export default function App() {
     setCatalogRequestKey((value) => value + 1);
   }
 
-  function startNewSession(scenarioId: number) {
-    const fallbackSession = displayedSession;
+  function openScenarioPicker(source: ScenarioPickerSource) {
+    if (catalogState.status !== "ready" || !defaultScenario) {
+      return;
+    }
 
     setActionError(null);
+    setScenarioPickerState({
+      status: "open",
+      source,
+      selectedScenarioId: defaultScenario.id,
+      error: null,
+    });
+  }
+
+  function closeScenarioPicker() {
+    if (pendingAction === "new-session") {
+      return;
+    }
+
+    setScenarioPickerState({ status: "closed" });
+  }
+
+  function selectScenario(scenarioId: number) {
+    setScenarioPickerState((previous) =>
+      previous.status !== "open"
+        ? previous
+        : { ...previous, selectedScenarioId: scenarioId, error: null },
+    );
+  }
+
+  function confirmScenarioPicker() {
+    if (scenarioPickerState.status !== "open" || scenarioPickerState.selectedScenarioId === null) {
+      return;
+    }
+
+    const selectedScenarioId = scenarioPickerState.selectedScenarioId;
+    const fallbackSession = displayedSession;
+
     setPendingAction("new-session");
-    void createPracticeSession({
-      scenarioId,
-    })
+    void createPracticeSession({ scenarioId: selectedScenarioId })
       .then((nextSession) => {
+        setScenarioPickerState({ status: "closed" });
         if (!fallbackSession) {
           setSessionOverride(nextSession);
         }
@@ -311,9 +369,15 @@ export default function App() {
         });
       })
       .catch((error: unknown) => {
-        setActionError({
-          message: error instanceof Error ? error.message : "Unable to create a new session.",
-        });
+        setScenarioPickerState((previous) =>
+          previous.status !== "open"
+            ? previous
+            : {
+                ...previous,
+                error:
+                  error instanceof Error ? error.message : "Unable to create a new session.",
+              },
+        );
       })
       .finally(() => {
         setPendingAction(null);
@@ -325,11 +389,7 @@ export default function App() {
         {
           label: "New Session",
           onClick: () => {
-            if (!defaultScenario) {
-              return;
-            }
-
-            startNewSession(defaultScenario.id);
+            openScenarioPicker("topbar");
           },
           disabled: pendingAction !== null || catalogState.status !== "ready" || !defaultScenario,
         },
@@ -483,12 +543,8 @@ export default function App() {
           detail={actionError.message}
           actionLabel="New Session"
           onAction={() => {
-            if (!defaultScenario) {
-              return;
-            }
-
             setHasAttemptedAutoCreate(true);
-            startNewSession(defaultScenario.id);
+            openScenarioPicker("empty");
           }}
         />
       ) : hasOrphanedSessionState ? (
@@ -499,12 +555,8 @@ export default function App() {
           detail={actionError?.message ?? currentSession.error}
           actionLabel="New Session"
           onAction={() => {
-            if (!defaultScenario) {
-              return;
-            }
-
             setHasAttemptedAutoCreate(true);
-            startNewSession(defaultScenario.id);
+            openScenarioPicker("orphaned");
           }}
         />
       ) : currentSession.status === "error" || actionError ? (
@@ -526,6 +578,21 @@ export default function App() {
       ) : (
         <LoginScreen preview={<Workbench preview />} />
       )}
+      <ScenarioPickerModal
+        body="Pick a sandbox before creating the next session."
+        confirmLabel="Start Session"
+        error={scenarioPickerState.status === "open" ? scenarioPickerState.error : null}
+        onClose={closeScenarioPicker}
+        onConfirm={confirmScenarioPicker}
+        onSelect={selectScenario}
+        open={scenarioPickerState.status === "open"}
+        pending={pendingAction === "new-session"}
+        scenarios={scenarioOptions}
+        selectedScenarioId={
+          scenarioPickerState.status === "open" ? scenarioPickerState.selectedScenarioId : null
+        }
+        title="Choose a practice scenario"
+      />
     </div>
   );
 }

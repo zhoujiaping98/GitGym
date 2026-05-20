@@ -612,6 +612,29 @@ describe("App", () => {
     expect(reconnect).not.toHaveBeenCalled();
   });
 
+  it("opens the scenario picker before creating a new session from the top bar", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "New Session" })).toBeEnabled();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    expect(
+      screen.getByRole("dialog", { name: "Choose a practice scenario" }),
+    ).toBeInTheDocument();
+    expect(mockCreatePracticeSession).not.toHaveBeenCalled();
+  });
+
   it("shows a logout action for authenticated users and returns to the login screen after logout", async () => {
     let resolveLogout: (() => void) | null = null;
     const refresh = vi
