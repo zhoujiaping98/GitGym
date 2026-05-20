@@ -746,6 +746,12 @@ a {
   padding-right: 0.25rem;
 }
 
+.scenario-picker-viewport {
+  width: min(100%, 42rem);
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+}
+
 .scenario-picker-option {
   width: 100%;
   display: grid;
@@ -774,6 +780,10 @@ a {
 @media (max-width: 720px) {
   .scenario-picker-backdrop {
     padding: 1rem;
+  }
+
+  .scenario-picker-viewport {
+    max-height: calc(100vh - 2rem);
   }
 
   .scenario-picker-actions {

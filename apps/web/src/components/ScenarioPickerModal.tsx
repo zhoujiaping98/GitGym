@@ -85,81 +85,83 @@ export function ScenarioPickerModal({
 
   return (
     <div className="scenario-picker-backdrop" role="presentation">
-      <section
-        aria-describedby={error ? `${bodyId} ${errorId}` : bodyId}
-        aria-labelledby="scenario-picker-title"
-        aria-modal="true"
-        className="scenario-picker-modal"
-        ref={dialogRef}
-        role="dialog"
-        tabIndex={-1}
-      >
-        <header>
-          <span className="preview-label">Scenario picker</span>
-          <h2 id="scenario-picker-title">{title}</h2>
-          <p id={bodyId}>{body}</p>
-        </header>
-        <div className="scenario-picker-list-shell">
-          <div
-            aria-activedescendant={selectedOptionId}
-            aria-label="Practice scenarios"
-            className="scenario-picker-list"
-            id={listboxId}
-            role="listbox"
-          >
-            {scenarios.map((scenario, index) => {
-              const isSelected = selectedScenarioId === scenario.id;
-              const isFirstOption = index === 0;
-              const isTabbable =
-                selectedScenarioId === null ? isFirstOption : isSelected;
+      <div className="scenario-picker-viewport">
+        <section
+          aria-describedby={error ? `${bodyId} ${errorId}` : bodyId}
+          aria-labelledby="scenario-picker-title"
+          aria-modal="true"
+          className="scenario-picker-modal"
+          ref={dialogRef}
+          role="dialog"
+          tabIndex={-1}
+        >
+          <header>
+            <span className="preview-label">Scenario picker</span>
+            <h2 id="scenario-picker-title">{title}</h2>
+            <p id={bodyId}>{body}</p>
+          </header>
+          <div className="scenario-picker-list-shell">
+            <div
+              aria-activedescendant={selectedOptionId}
+              aria-label="Practice scenarios"
+              className="scenario-picker-list"
+              id={listboxId}
+              role="listbox"
+            >
+              {scenarios.map((scenario, index) => {
+                const isSelected = selectedScenarioId === scenario.id;
+                const isFirstOption = index === 0;
+                const isTabbable =
+                  selectedScenarioId === null ? isFirstOption : isSelected;
 
-              return (
-                <button
-                  key={scenario.id}
-                  id={`${listboxId}-option-${scenario.id}`}
-                  aria-selected={isSelected}
-                  aria-setsize={scenarios.length}
-                  aria-posinset={index + 1}
-                  className="scenario-picker-option"
-                  data-selected={isSelected}
-                  onClick={() => onSelect(scenario.id)}
-                  role="option"
-                  tabIndex={isTabbable ? 0 : -1}
-                  type="button"
-                >
-                  <strong>{scenario.name}</strong>
-                  <span>{scenario.key}</span>
-                  <span>Template: {scenario.templateName}</span>
-                </button>
-              );
-            })}
+                return (
+                  <button
+                    key={scenario.id}
+                    id={`${listboxId}-option-${scenario.id}`}
+                    aria-selected={isSelected}
+                    aria-setsize={scenarios.length}
+                    aria-posinset={index + 1}
+                    className="scenario-picker-option"
+                    data-selected={isSelected}
+                    onClick={() => onSelect(scenario.id)}
+                    role="option"
+                    tabIndex={isTabbable ? 0 : -1}
+                    type="button"
+                  >
+                    <strong>{scenario.name}</strong>
+                    <span>{scenario.key}</span>
+                    <span>Template: {scenario.templateName}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
-        {error ? (
-          <div
-            aria-atomic="true"
-            aria-live="assertive"
-            className="session-state-detail"
-            id={errorId}
-            role="alert"
-          >
-            {error}
+          {error ? (
+            <div
+              aria-atomic="true"
+              aria-live="assertive"
+              className="session-state-detail"
+              id={errorId}
+              role="alert"
+            >
+              {error}
+            </div>
+          ) : null}
+          <div className="scenario-picker-actions">
+            <button className="top-bar-button" disabled={pending} onClick={onClose} type="button">
+              Cancel
+            </button>
+            <button
+              className="primary-button"
+              disabled={pending || selectedScenarioId === null}
+              onClick={onConfirm}
+              type="button"
+            >
+              {pending ? "Starting..." : confirmLabel}
+            </button>
           </div>
-        ) : null}
-        <div className="scenario-picker-actions">
-          <button className="top-bar-button" disabled={pending} onClick={onClose} type="button">
-            Cancel
-          </button>
-          <button
-            className="primary-button"
-            disabled={pending || selectedScenarioId === null}
-            onClick={onConfirm}
-            type="button"
-          >
-            {pending ? "Starting..." : confirmLabel}
-          </button>
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
   );
 }
