@@ -727,11 +727,8 @@ a {
 .scenario-picker-modal {
   width: min(100%, 42rem);
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
   gap: 1rem;
-  max-height: min(100%, calc(100vh - 4rem));
   padding: 1.35rem;
-  overflow: hidden;
   border-radius: 1.35rem;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(242, 246, 250, 0.98));
   border: 1px solid rgba(255, 255, 255, 0.7);
@@ -741,7 +738,10 @@ a {
 .scenario-picker-list {
   display: grid;
   gap: 0.75rem;
-  min-height: 0;
+}
+
+.scenario-picker-list-shell {
+  max-height: min(24rem, calc(100vh - 17rem));
   overflow-y: auto;
   padding-right: 0.25rem;
 }

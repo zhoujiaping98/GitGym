@@ -34,7 +34,6 @@ export function ScenarioPickerModal({
   onConfirm,
   onClose,
 }: ScenarioPickerModalProps) {
-  const titleId = useId();
   const bodyId = useId();
   const errorId = useId();
   const listboxId = useId();
@@ -52,10 +51,10 @@ export function ScenarioPickerModal({
           return;
         }
 
-        const selectedOption = dialogRef.current.querySelector<HTMLElement>(
-          '[role="option"][aria-selected="true"]',
+        const focusTarget = dialogRef.current.querySelector<HTMLElement>(
+          '[role="option"][tabindex="0"]',
         );
-        (selectedOption ?? dialogRef.current).focus();
+        (focusTarget ?? dialogRef.current).focus();
       });
       return;
     }
@@ -88,7 +87,7 @@ export function ScenarioPickerModal({
     <div className="scenario-picker-backdrop" role="presentation">
       <section
         aria-describedby={error ? `${bodyId} ${errorId}` : bodyId}
-        aria-labelledby={titleId}
+        aria-labelledby="scenario-picker-title"
         aria-modal="true"
         className="scenario-picker-modal"
         ref={dialogRef}
@@ -97,35 +96,44 @@ export function ScenarioPickerModal({
       >
         <header>
           <span className="preview-label">Scenario picker</span>
-          <h2 id={titleId}>{title}</h2>
+          <h2 id="scenario-picker-title">{title}</h2>
           <p id={bodyId}>{body}</p>
         </header>
-        <div
-          aria-activedescendant={selectedOptionId}
-          aria-label="Practice scenarios"
-          className="scenario-picker-list"
-          id={listboxId}
-          role="listbox"
-        >
-          {scenarios.map((scenario, index) => (
-            <button
-              key={scenario.id}
-              id={`${listboxId}-option-${scenario.id}`}
-              aria-selected={selectedScenarioId === scenario.id}
-              aria-setsize={scenarios.length}
-              aria-posinset={index + 1}
-              className="scenario-picker-option"
-              data-selected={selectedScenarioId === scenario.id}
-              onClick={() => onSelect(scenario.id)}
-              role="option"
-              tabIndex={selectedScenarioId === scenario.id ? 0 : -1}
-              type="button"
-            >
-              <strong>{scenario.name}</strong>
-              <span>{scenario.key}</span>
-              <span>Template: {scenario.templateName}</span>
-            </button>
-          ))}
+        <div className="scenario-picker-list-shell">
+          <div
+            aria-activedescendant={selectedOptionId}
+            aria-label="Practice scenarios"
+            className="scenario-picker-list"
+            id={listboxId}
+            role="listbox"
+          >
+            {scenarios.map((scenario, index) => {
+              const isSelected = selectedScenarioId === scenario.id;
+              const isFirstOption = index === 0;
+              const isTabbable =
+                selectedScenarioId === null ? isFirstOption : isSelected;
+
+              return (
+                <button
+                  key={scenario.id}
+                  id={`${listboxId}-option-${scenario.id}`}
+                  aria-selected={isSelected}
+                  aria-setsize={scenarios.length}
+                  aria-posinset={index + 1}
+                  className="scenario-picker-option"
+                  data-selected={isSelected}
+                  onClick={() => onSelect(scenario.id)}
+                  role="option"
+                  tabIndex={isTabbable ? 0 : -1}
+                  type="button"
+                >
+                  <strong>{scenario.name}</strong>
+                  <span>{scenario.key}</span>
+                  <span>Template: {scenario.templateName}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
         {error ? (
           <div
