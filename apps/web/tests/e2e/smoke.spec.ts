@@ -237,7 +237,7 @@ test.describe("GitGym shell", () => {
                 session: {
                   id: 43,
                   user_id: 7,
-                  scenario_id: 1,
+                  scenario_id: 2,
                   template_id: 1,
                   runner_ref: "runner-43",
                   workspace_path: "/tmp/gitgym/session-43",
@@ -316,6 +316,9 @@ test.describe("GitGym shell", () => {
     await expect(page.getByText("runner-43")).toBeVisible();
     await expect(page.getByText("/tmp/gitgym/session-43")).toBeVisible();
     await expect(page.getByText("session #43")).toBeVisible();
+    await expect(page.getByRole("complementary")).toContainText(
+      /session #43\s*scenario #2\s*template #1/,
+    );
     await expect(page.getByRole("button", { name: "Reset" })).toBeVisible();
     await page.getByRole("button", { name: "Reset" }).click();
 
