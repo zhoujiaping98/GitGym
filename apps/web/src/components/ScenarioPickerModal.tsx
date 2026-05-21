@@ -44,6 +44,29 @@ export function ScenarioPickerModal({
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
   const optionRefs = useRef(new Map<number, HTMLButtonElement>());
 
+  function getFocusableElements() {
+    if (!dialogRef.current) {
+      return [];
+    }
+
+    return Array.from(
+      dialogRef.current.querySelectorAll<HTMLElement>(
+        [
+          'button:not([disabled])',
+          '[href]',
+          'input:not([disabled])',
+          'select:not([disabled])',
+          'textarea:not([disabled])',
+          '[tabindex]:not([tabindex="-1"])',
+        ].join(", "),
+      ),
+    ).filter(
+      (element) =>
+        !element.hasAttribute("disabled") &&
+        element.getAttribute("aria-hidden") !== "true",
+    );
+  }
+
   function focusScenarioAtIndex(index: number) {
     const boundedIndex = Math.max(0, Math.min(index, scenarios.length - 1));
     const scenario = scenarios[boundedIndex];
@@ -111,9 +134,45 @@ export function ScenarioPickerModal({
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !pending) {
+      if (event.key === "Escape") {
+        if (!pending) {
+          event.preventDefault();
+          onClose();
+        }
+        return;
+      }
+
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const focusableElements = getFocusableElements();
+
+      if (focusableElements.length === 0) {
         event.preventDefault();
-        onClose();
+        dialogRef.current?.focus();
+        return;
+      }
+
+      const firstFocusableElement = focusableElements[0];
+      const lastFocusableElement = focusableElements[focusableElements.length - 1];
+      const activeElement =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+      if (event.shiftKey) {
+        if (
+          activeElement === firstFocusableElement ||
+          activeElement === dialogRef.current
+        ) {
+          event.preventDefault();
+          lastFocusableElement?.focus();
+        }
+        return;
+      }
+
+      if (activeElement === lastFocusableElement) {
+        event.preventDefault();
+        firstFocusableElement?.focus();
       }
     }
 

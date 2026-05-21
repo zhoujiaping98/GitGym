@@ -451,6 +451,65 @@ describe("App", () => {
     });
   });
 
+  it("traps focus inside the scenario picker while it is open", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockFetch.mockImplementationOnce(() =>
+      createCatalogResponse({
+        templates: defaultCatalog.templates,
+        scenarios: [
+          {
+            id: 1,
+            key: "sandbox-standard",
+            name: "Standard Sandbox",
+            template_id: 1,
+          },
+          {
+            id: 2,
+            key: "sandbox-advanced",
+            name: "Advanced Sandbox",
+            template_id: 1,
+          },
+        ],
+      }),
+    );
+
+    render(<App />);
+
+    await waitForNewSessionAction();
+
+    const backgroundNewSessionButton = screen.getByRole("button", { name: "New Session" });
+    fireEvent.click(backgroundNewSessionButton);
+
+    await waitForScenarioPicker();
+
+    const firstOption = screen.getByRole("option", { name: /Standard Sandbox/i });
+    const startSessionButton = screen.getByRole("button", { name: "Start Session" });
+
+    firstOption.focus();
+    expect(firstOption).toHaveFocus();
+
+    fireEvent.keyDown(firstOption, { key: "Tab", shiftKey: true });
+
+    await waitFor(() => {
+      expect(startSessionButton).toHaveFocus();
+    });
+    expect(backgroundNewSessionButton).not.toHaveFocus();
+
+    fireEvent.keyDown(startSessionButton, { key: "Tab" });
+
+    await waitFor(() => {
+      expect(firstOption).toHaveFocus();
+    });
+    expect(backgroundNewSessionButton).not.toHaveFocus();
+  });
+
   it("keeps create-session failures inside the scenario picker", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
