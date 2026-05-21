@@ -334,12 +334,14 @@ test.describe("GitGym shell", () => {
       page.getByRole("heading", { name: "Checking session" }),
     ).toBeVisible();
     releaseRefresh?.();
+    const sessionCard = page.getByLabel("Operational session card");
     await expect(page.getByText("runner-43")).toBeVisible();
-    await expect(page.getByText("/tmp/gitgym/session-43")).toBeVisible();
-    await expect(page.getByText("session #43")).toBeVisible();
-    await expect(page.getByRole("complementary")).toContainText(
-      /session #43\s*scenario #2\s*template #1/,
-    );
+    await expect(sessionCard.getByText("Recover Branch")).toBeVisible();
+    await expect(sessionCard.getByText("Template: Standard")).toBeVisible();
+    await expect(sessionCard.getByText("runner-43")).toBeVisible();
+    await expect(sessionCard.getByText("/tmp/gitgym/session-43")).toBeVisible();
+    await expect(sessionCard.getByText("Session ID")).toBeVisible();
+    await expect(sessionCard.getByText("43", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Reset" })).toBeVisible();
     await page.getByRole("button", { name: "Reset" }).click();
 
@@ -470,12 +472,14 @@ test.describe("GitGym shell", () => {
       page.getByRole("heading", { name: "Checking session" }),
     ).toBeVisible();
     releaseRefresh?.();
+    const sessionCard = page.getByLabel("Operational session card");
     await expect(page.getByText("runner-43")).toBeVisible();
-    await expect(page.getByText("/tmp/gitgym/session-43")).toBeVisible();
-    await expect(page.getByText("session #43")).toBeVisible();
-    await expect(page.getByRole("complementary")).toContainText(
-      /session #43\s*scenario #2\s*template #1/,
-    );
+    await expect(sessionCard.getByText("Recover Branch")).toBeVisible();
+    await expect(sessionCard.getByText("Template: Standard")).toBeVisible();
+    await expect(sessionCard.getByText("runner-43")).toBeVisible();
+    await expect(sessionCard.getByText("/tmp/gitgym/session-43")).toBeVisible();
+    await expect(sessionCard.getByText("Session ID")).toBeVisible();
+    await expect(sessionCard.getByText("43", { exact: true })).toBeVisible();
     expect(createSessionCalls).toBe(1);
     expect(gatedReconcileHits).toBeGreaterThan(0);
   });
@@ -600,7 +604,7 @@ test.describe("GitGym shell", () => {
     await startSecondScenario(page);
 
     await expect(page.getByText("runner-42")).toBeVisible();
-    await expect(page.getByText("Terminal", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("live-terminal")).toBeVisible();
     await expect(
       page.getByText("Created a new session, but the server did not return it as current."),
     ).toBeVisible();
@@ -666,7 +670,7 @@ test.describe("GitGym shell", () => {
     await startSecondScenario(page);
 
     await expect(page.getByText("runner-42")).toBeVisible();
-    await expect(page.getByText("Terminal", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("live-terminal")).toBeVisible();
     await expect(
       page.getByText("Created a new session, but refreshing it failed: api offline"),
     ).toBeVisible();

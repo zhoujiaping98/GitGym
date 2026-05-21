@@ -75,13 +75,10 @@ export function RepoPanel({
           <div className="repo-state-header">
             <span className="repo-state-health repo-state-health-idle">Preview</span>
             <div className="repo-state-heading">
-              <strong>{formatScenarioName(scenarioName, session?.scenarioId)}</strong>
-              <span>{formatTemplateName(templateName, session?.templateId)}</span>
+              <strong>Sandbox status</strong>
+              <p>Operational details appear after a live session is attached.</p>
             </div>
           </div>
-          <p className="repo-state-shell-copy">
-            Session infrastructure appears here once a live workspace is attached.
-          </p>
         </section>
       </aside>
     );

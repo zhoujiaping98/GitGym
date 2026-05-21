@@ -305,7 +305,13 @@ describe("App", () => {
     expect(
       screen.getByText(/safe trial repository, real git behavior, and a resettable environment/i),
     ).toBeInTheDocument();
-    expect(screen.getByText("Template: Standard")).toBeInTheDocument();
+    expect(screen.getByText("Repository")).toBeInTheDocument();
+    expect(screen.getByText("Preview")).toBeInTheDocument();
+    expect(screen.getByText("Sandbox status")).toBeInTheDocument();
+    expect(
+      screen.getByText("Operational details appear after a live session is attached."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("runner-42")).not.toBeInTheDocument();
     expect(screen.getByText("Signed out")).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "New Session" }),
