@@ -407,10 +407,12 @@ describe("App", () => {
 
     render(<App />);
 
-    const sessionDetails = await screen.findByLabelText("Repository session details");
+    const sessionDetails = screen.getByLabelText("Repository session details");
 
-    expect(within(sessionDetails).getByText("Standard Sandbox")).toBeInTheDocument();
+    expect(await within(sessionDetails).findByText("Standard Sandbox")).toBeInTheDocument();
     expect(within(sessionDetails).getByText("Template: Standard")).toBeInTheDocument();
+    expect(within(sessionDetails).queryByText("scenario #1")).not.toBeInTheDocument();
+    expect(within(sessionDetails).queryByText("template #1")).not.toBeInTheDocument();
   });
 
   it("supports keyboard scenario selection before confirming a new session", async () => {
