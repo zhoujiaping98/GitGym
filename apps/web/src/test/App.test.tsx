@@ -206,6 +206,21 @@ async function waitForNewSessionAction() {
   });
 }
 
+async function waitForScenarioPicker() {
+  await waitFor(() => {
+    expect(
+      screen.getByRole("dialog", { name: "Choose a practice scenario" }),
+    ).toBeInTheDocument();
+  });
+}
+
+async function confirmScenarioPicker() {
+  await waitForScenarioPicker();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Start Session" }));
+  });
+}
+
 beforeEach(() => {
   mockUseCurrentSession.mockReset();
   mockUseTerminalSession.mockReset();
@@ -297,7 +312,7 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("automatically creates a first session for authenticated users without a current session", async () => {
+  it("opens the shared scenario picker from the authenticated empty state", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: null,
@@ -313,9 +328,54 @@ describe("App", () => {
       screen.queryByRole("link", { name: "Continue with GitHub" }),
     ).not.toBeInTheDocument();
 
+    await waitForScenarioPicker();
+    expect(mockCreatePracticeSession).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Start Session" })).toBeEnabled();
+  });
+
+  it("uses the selected scenario when the modal confirms a new session", async () => {
+    const refresh = vi.fn().mockResolvedValue({
+      ...nextSession,
+      scenarioId: 2,
+    });
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: null,
+      absenceReason: "missing",
+      error: null,
+      refresh,
+    });
+
+    mockFetch.mockImplementationOnce(() =>
+      createCatalogResponse({
+        templates: defaultCatalog.templates,
+        scenarios: [
+          {
+            id: 1,
+            key: "sandbox-standard",
+            name: "Standard Sandbox",
+            template_id: 1,
+          },
+          {
+            id: 2,
+            key: "sandbox-advanced",
+            name: "Advanced Sandbox",
+            template_id: 1,
+          },
+        ],
+      }),
+    );
+
+    render(<App />);
+
+    await waitForScenarioPicker();
+    fireEvent.click(screen.getByRole("option", { name: /Advanced Sandbox/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Session" }));
+
     await waitFor(() => {
       expect(mockCreatePracticeSession).toHaveBeenCalledWith({
-        scenarioId: 1,
+        scenarioId: 2,
       });
     });
 
@@ -323,9 +383,11 @@ describe("App", () => {
       expect(screen.getByText("Session live")).toBeInTheDocument();
       expect(screen.getByText("runner-43")).toBeInTheDocument();
     });
+
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("shows a manual recovery state when automatic first-session creation fails", async () => {
+  it("keeps create-session failures inside the scenario picker", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: null,
@@ -338,14 +400,20 @@ describe("App", () => {
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Create your first practice session" }),
-      ).toBeInTheDocument();
-    });
+    await confirmScenarioPicker();
 
-    expect(screen.getByText("create failed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("create failed")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole("dialog", { name: "Choose a practice scenario" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Retry sync" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Session unavailable" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows a recoverable manual create state after dismissing the auto-opened picker", async () => {
@@ -379,7 +447,7 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("waits for catalog before auto-creating a session", async () => {
+  it("waits for catalog before auto-opening the scenario picker", async () => {
     let resolveCatalog: ((value: Response) => void) | null = null;
 
     mockUseCurrentSession.mockReturnValue({
@@ -409,6 +477,9 @@ describe("App", () => {
       );
     });
     expect(mockCreatePracticeSession).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("dialog", { name: "Choose a practice scenario" }),
+    ).not.toBeInTheDocument();
 
     resolveCatalog?.(
       new Response(
@@ -431,9 +502,9 @@ describe("App", () => {
     );
 
     await waitFor(() => {
-      expect(mockCreatePracticeSession).toHaveBeenCalledWith({
-        scenarioId: 1,
-      });
+      expect(
+        screen.getByRole("dialog", { name: "Choose a practice scenario" }),
+      ).toBeInTheDocument();
     });
   });
 
@@ -502,7 +573,7 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "New Session" })).not.toBeInTheDocument();
   });
 
-  it("shows a workspace recovery state when the current session is orphaned", async () => {
+  it("opens the shared scenario picker from the orphaned recovery state", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: null,
@@ -524,7 +595,10 @@ describe("App", () => {
     expect(
       screen.getByText("practice session workspace is unavailable"),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    await waitForScenarioPicker();
+    expect(mockCreatePracticeSession).not.toHaveBeenCalled();
   });
 
   it("renders a loading shell while checking for a current session", () => {
@@ -621,6 +695,7 @@ describe("App", () => {
 
     await waitForNewSessionAction();
     fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+    await confirmScenarioPicker();
 
     await waitFor(() => {
       expect(mockCreatePracticeSession).toHaveBeenCalledWith({
@@ -888,6 +963,7 @@ describe("App", () => {
 
     await waitForNewSessionAction();
     fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+    await confirmScenarioPicker();
 
     await waitFor(() => {
       expect(mockCreatePracticeSession).toHaveBeenCalledTimes(1);
@@ -927,6 +1003,7 @@ describe("App", () => {
 
     await waitForNewSessionAction();
     fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+    await confirmScenarioPicker();
 
     await waitFor(() => {
       expect(refresh).toHaveBeenCalledTimes(1);
@@ -961,12 +1038,16 @@ describe("App", () => {
 
     await waitForNewSessionAction();
     fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+    await confirmScenarioPicker();
 
     await waitFor(() => {
       expect(screen.getByText("create failed")).toBeInTheDocument();
     });
 
     expect(screen.queryByRole("button", { name: "Retry sync" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "Choose a practice scenario" }),
+    ).toBeInTheDocument();
   });
 
   it("surfaces a reset reconciliation error when refresh returns no current session", async () => {
@@ -1238,6 +1319,7 @@ describe("App", () => {
 
     await waitForNewSessionAction();
     fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+    await confirmScenarioPicker();
 
     await waitFor(() => {
       expect(refresh).toHaveBeenCalledTimes(1);
