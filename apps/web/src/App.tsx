@@ -151,6 +151,14 @@ export default function App() {
     hasAuthenticatedEmptyState &&
     !actionError &&
     !(hasAttemptedAutoCreate && scenarioPickerState.status === "closed");
+  const displayedScenario =
+    displayedSession && catalog
+      ? catalog.scenarios.find((entry) => entry.id === displayedSession.scenarioId) ?? null
+      : null;
+  const displayedTemplate =
+    displayedSession && catalog
+      ? catalog.templates.find((entry) => entry.id === displayedSession.templateId) ?? null
+      : null;
 
   useEffect(() => {
     if (
@@ -524,7 +532,12 @@ export default function App() {
               </div>
             ) : null}
           </div>
-          <Workbench session={displayedSession} terminal={terminalSession} />
+          <Workbench
+            session={displayedSession}
+            terminal={terminalSession}
+            scenarioName={displayedScenario?.name ?? null}
+            templateName={displayedTemplate?.name ?? null}
+          />
         </main>
       ) : currentSession.status === "loading" ? (
         <AppStateShell

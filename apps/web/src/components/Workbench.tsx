@@ -7,6 +7,8 @@ type WorkbenchProps = {
   preview?: boolean;
   session?: PracticeSession | null;
   terminal?: TerminalSessionState;
+  scenarioName?: string | null;
+  templateName?: string | null;
 };
 
 const previewTerminal: TerminalSessionState = {
@@ -24,6 +26,8 @@ export function Workbench({
   preview = false,
   session = null,
   terminal = previewTerminal,
+  scenarioName = null,
+  templateName = null,
 }: WorkbenchProps) {
   const shellClassName = preview
     ? "workbench-shell workbench-shell-preview"
@@ -37,7 +41,13 @@ export function Workbench({
         sessionKey={preview ? "preview-terminal" : session?.id ?? null}
         terminal={terminal}
       />
-      <RepoPanel preview={preview} session={session} />
+      <RepoPanel
+        preview={preview}
+        session={session}
+        scenarioName={scenarioName}
+        templateName={templateName}
+        terminalStatus={terminal.status}
+      />
       <CommandHistoryPanel preview={preview} terminal={terminal} />
     </section>
   );

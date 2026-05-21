@@ -1,8 +1,11 @@
-import type { PracticeSession } from "../types";
+import type { PracticeSession, TerminalSessionState } from "../types";
 
 type RepoPanelProps = {
   preview?: boolean;
   session: PracticeSession | null;
+  scenarioName?: string | null;
+  templateName?: string | null;
+  terminalStatus?: TerminalSessionState["status"];
 };
 
 const previewCommits = ["a91d7f2", "f6d23c9", "2c8e14a"];
@@ -16,7 +19,13 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-export function RepoPanel({ preview = false, session }: RepoPanelProps) {
+export function RepoPanel({
+  preview = false,
+  session,
+  scenarioName = null,
+  templateName = null,
+  terminalStatus = "idle",
+}: RepoPanelProps) {
   if (preview || !session) {
     return (
       <aside className="workbench-side">
@@ -67,7 +76,7 @@ export function RepoPanel({ preview = false, session }: RepoPanelProps) {
         </div>
         <div>
           <dt>Status</dt>
-          <dd>{session.status}</dd>
+          <dd>{`${session.status} / terminal ${terminalStatus}`}</dd>
         </div>
         <div>
           <dt>Started</dt>
@@ -85,11 +94,11 @@ export function RepoPanel({ preview = false, session }: RepoPanelProps) {
         </div>
         <div className="commit-node">
           <span className="commit-dot commit-dot-muted" />
-          <span>scenario #{session.scenarioId}</span>
+          <span>{scenarioName ?? `scenario #${session.scenarioId}`}</span>
         </div>
         <div className="commit-node">
           <span className="commit-dot commit-dot-muted" />
-          <span>template #{session.templateId}</span>
+          <span>{templateName ? `Template: ${templateName}` : `template #${session.templateId}`}</span>
         </div>
       </div>
     </aside>

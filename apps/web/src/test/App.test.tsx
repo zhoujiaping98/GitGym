@@ -1,5 +1,5 @@
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import * as api from "../lib/api";
@@ -385,6 +385,32 @@ describe("App", () => {
     });
 
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders readable scenario and template names in the session card", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementationOnce(() => createCatalogResponse());
+
+    render(<App />);
+
+    const sessionDetails = await screen.findByLabelText("Repository session details");
+
+    expect(within(sessionDetails).getByText("Standard Sandbox")).toBeInTheDocument();
+    expect(within(sessionDetails).getByText("Template: Standard")).toBeInTheDocument();
   });
 
   it("supports keyboard scenario selection before confirming a new session", async () => {
