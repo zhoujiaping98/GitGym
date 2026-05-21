@@ -834,8 +834,6 @@ describe("App", () => {
       refresh: vi.fn().mockResolvedValue(null),
     });
 
-    mockFetch.mockImplementationOnce(() => createCatalogResponse());
-
     render(<App />);
 
     await waitFor(() => {
@@ -846,6 +844,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("dialog", { name: "Choose a practice scenario" }),
     ).toBeInTheDocument();
+    expect(mockCreatePracticeSession).not.toHaveBeenCalled();
   });
 
   it("renders a loading shell while checking for a current session", () => {
