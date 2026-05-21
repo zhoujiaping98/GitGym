@@ -800,12 +800,12 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "New Session" })).not.toBeInTheDocument();
   });
 
-  it("opens the shared scenario picker from the orphaned recovery state", async () => {
+  it("renders a recovery-first workspace unavailable shell for orphaned sessions", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: null,
       absenceReason: "orphaned",
-      error: "practice session workspace is unavailable",
+      error: "workspace path is no longer available",
       refresh: vi.fn().mockResolvedValue(null),
     });
 
@@ -817,11 +817,12 @@ describe("App", () => {
       ).toBeInTheDocument();
     });
     expect(
-      screen.getByText("Your last sandbox can no longer be attached. Start a fresh session."),
+      screen.getByText(
+        "Your previous sandbox can no longer be reopened. Start a fresh session to keep practicing.",
+      ),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText("practice session workspace is unavailable"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("workspace path is no longer available")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "New Session" }));
 
     await waitForScenarioPicker();

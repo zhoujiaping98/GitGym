@@ -590,7 +590,7 @@ export default function App() {
         <AppStateShell
           eyebrow="Workspace recovery"
           title="Workspace unavailable"
-          body="Your last sandbox can no longer be attached. Start a fresh session."
+          body="Your previous sandbox can no longer be reopened. Start a fresh session to keep practicing."
           detail={actionError?.message ?? currentSession.error}
           actionLabel="New Session"
           onAction={() => {
