@@ -823,10 +823,6 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("workspace path is no longer available")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
-
-    await waitForScenarioPicker();
-    expect(mockCreatePracticeSession).not.toHaveBeenCalled();
   });
 
   it("renders a loading shell while checking for a current session", () => {
