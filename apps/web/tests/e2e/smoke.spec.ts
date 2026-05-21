@@ -146,6 +146,7 @@ test.describe("GitGym shell", () => {
     templates: [{ id: 1, key: "standard", name: "Standard" }],
     scenarios: [
       { id: 1, key: "sandbox-standard", name: "Standard Sandbox", template_id: 1 },
+      { id: 2, key: "recover-branch", name: "Recover Branch", template_id: 1 },
     ],
   };
 
@@ -179,6 +180,15 @@ test.describe("GitGym shell", () => {
   test.afterEach(async () => {
     await terminalStub.close();
   });
+
+  async function startSecondScenario(page: Page) {
+    await page.getByRole("button", { name: "New Session" }).click();
+    await expect(
+      page.getByRole("dialog", { name: "Choose a practice scenario" }),
+    ).toBeVisible();
+    await page.getByRole("option", { name: /Recover Branch/i }).click();
+    await page.getByRole("button", { name: "Start Session" }).click();
+  }
 
   test("shows the signed-out login shell when there is no active session", async ({
     page,
@@ -247,7 +257,7 @@ test.describe("GitGym shell", () => {
       }
 
       const body = JSON.parse(route.request().postData() ?? "{}");
-      expect(body).toEqual({ scenario_id: 1 });
+      expect(body).toEqual({ scenario_id: 2 });
       createSessionCalls += 1;
       await route.fulfill({
         status: 201,
@@ -256,7 +266,7 @@ test.describe("GitGym shell", () => {
           session: {
             id: 43,
             user_id: 7,
-            scenario_id: 1,
+            scenario_id: 2,
             template_id: 1,
             runner_ref: "runner-43",
             workspace_path: "/tmp/gitgym/session-43",
@@ -298,7 +308,7 @@ test.describe("GitGym shell", () => {
       page.getByRole("button", { name: "Reset" }),
     ).toBeVisible();
 
-    await page.getByRole("button", { name: "New Session" }).click();
+    await startSecondScenario(page);
     await expect(
       page.getByRole("heading", { name: "Checking session" }),
     ).toBeVisible();
@@ -407,7 +417,7 @@ test.describe("GitGym shell", () => {
       }
 
       const body = JSON.parse(route.request().postData() ?? "{}");
-      expect(body).toEqual({ scenario_id: 1 });
+      expect(body).toEqual({ scenario_id: 2 });
       await route.fulfill({
         status: 201,
         contentType: "application/json",
@@ -415,7 +425,7 @@ test.describe("GitGym shell", () => {
           session: {
             id: 43,
             user_id: 7,
-            scenario_id: 1,
+            scenario_id: 2,
             template_id: 1,
             runner_ref: "runner-43",
             workspace_path: "/tmp/gitgym/session-43",
@@ -431,7 +441,7 @@ test.describe("GitGym shell", () => {
     await page.goto("/");
     await expect(page.getByText("runner-42")).toBeVisible();
 
-    await page.getByRole("button", { name: "New Session" }).click();
+    await startSecondScenario(page);
 
     await expect(page.getByText("runner-42")).toBeVisible();
     await expect(page.getByText("Terminal", { exact: true })).toBeVisible();
@@ -473,7 +483,7 @@ test.describe("GitGym shell", () => {
       }
 
       const body = JSON.parse(route.request().postData() ?? "{}");
-      expect(body).toEqual({ scenario_id: 1 });
+      expect(body).toEqual({ scenario_id: 2 });
       await route.fulfill({
         status: 201,
         contentType: "application/json",
@@ -481,7 +491,7 @@ test.describe("GitGym shell", () => {
           session: {
             id: 43,
             user_id: 7,
-            scenario_id: 1,
+            scenario_id: 2,
             template_id: 1,
             runner_ref: "runner-43",
             workspace_path: "/tmp/gitgym/session-43",
@@ -497,7 +507,7 @@ test.describe("GitGym shell", () => {
     await page.goto("/");
     await expect(page.getByText("runner-42")).toBeVisible();
 
-    await page.getByRole("button", { name: "New Session" }).click();
+    await startSecondScenario(page);
 
     await expect(page.getByText("runner-42")).toBeVisible();
     await expect(page.getByText("Terminal", { exact: true })).toBeVisible();
