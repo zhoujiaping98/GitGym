@@ -555,7 +555,7 @@ export default function App() {
         <AppStateShell
           eyebrow="Catalog unavailable"
           title="Practice catalog unavailable"
-          body="We could not load the available practice scenarios."
+          body="We couldn’t load the available practice scenarios for this environment."
           detail={catalogState.error}
           actionLabel="Try again"
           onAction={retryCatalogLoad}

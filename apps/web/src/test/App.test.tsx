@@ -735,7 +735,7 @@ describe("App", () => {
     });
   });
 
-  it("renders a dedicated catalog-unavailable state when catalog loading fails", async () => {
+  it("renders a recovery-first catalog unavailable shell", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: null,
@@ -761,6 +761,9 @@ describe("App", () => {
       ).toBeInTheDocument();
     });
 
+    expect(
+      screen.getByText("We couldn’t load the available practice scenarios for this environment."),
+    ).toBeInTheDocument();
     expect(screen.getByText("catalog offline")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
     expect(mockCreatePracticeSession).not.toHaveBeenCalled();
