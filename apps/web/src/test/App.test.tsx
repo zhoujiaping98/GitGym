@@ -387,7 +387,7 @@ describe("App", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("renders readable scenario and template names in the session card", async () => {
+  it("renders the operational session card for an active session", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
@@ -407,12 +407,55 @@ describe("App", () => {
 
     render(<App />);
 
-    const sessionDetails = screen.getByLabelText("Repository session details");
+    const sessionCard = screen.getByLabelText("Operational session card");
 
-    expect(await within(sessionDetails).findByText("Standard Sandbox")).toBeInTheDocument();
-    expect(within(sessionDetails).getByText("Template: Standard")).toBeInTheDocument();
-    expect(within(sessionDetails).queryByText("scenario #1")).not.toBeInTheDocument();
-    expect(within(sessionDetails).queryByText("template #1")).not.toBeInTheDocument();
+    expect(await within(sessionCard).findByText("Live")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("Standard Sandbox")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("Template: Standard")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("Runner")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("runner-42")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("Workspace")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("/tmp/gitgym/session-42")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("Session ID")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("42")).toBeInTheDocument();
+  });
+
+  it("keeps the workbench visible and marks the card recovering when the terminal degrades", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "unavailable",
+        history: [
+          {
+            id: "cmd-1",
+            command: "git status",
+            executedAt: "2026-05-16T10:04:00.000Z",
+            exitCode: 0,
+            summary: "working tree clean",
+          },
+        ],
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        error: "Terminal transport is unavailable for this session.",
+      }),
+    );
+
+    mockFetch.mockImplementationOnce(() => createCatalogResponse());
+
+    render(<App />);
+
+    const sessionCard = screen.getByLabelText("Operational session card");
+
+    expect(await within(sessionCard).findByText("Recovering")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("Terminal")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("unavailable")).toBeInTheDocument();
+    expect(screen.getByText("History")).toBeInTheDocument();
   });
 
   it("supports keyboard scenario selection before confirming a new session", async () => {
@@ -838,7 +881,7 @@ describe("App", () => {
       screen.queryByRole("link", { name: "Continue with GitHub" }),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Session live")).toBeInTheDocument();
-    expect(screen.getByText("Terminal")).toBeInTheDocument();
+    expect(screen.getAllByText("Terminal").length).toBeGreaterThan(0);
     expect(screen.getByText("Repository")).toBeInTheDocument();
     expect(screen.getByText("History")).toBeInTheDocument();
     expect(screen.getByText("runner-42")).toBeInTheDocument();
