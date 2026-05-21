@@ -370,16 +370,15 @@ test.describe("GitGym shell", () => {
   test("supports keyboard scenario selection and traps focus inside the picker", async ({
     page,
   }) => {
-    let currentSessionCalls = 0;
     let createSessionCalls = 0;
+    let shouldGateRefresh = false;
     let releaseRefresh: (() => void) | null = null;
     const refreshGate = new Promise<void>((resolve) => {
       releaseRefresh = resolve;
     });
 
     await page.route("**/api/v1/practice-sessions/current", async (route) => {
-      currentSessionCalls += 1;
-      if (currentSessionCalls > 2) {
+      if (shouldGateRefresh) {
         await refreshGate;
       }
 
@@ -387,9 +386,8 @@ test.describe("GitGym shell", () => {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(
-          currentSessionCalls <= 2
-            ? activeSessionPayload
-            : {
+          shouldGateRefresh
+            ? {
                 session: {
                   id: 43,
                   user_id: 7,
@@ -402,7 +400,8 @@ test.describe("GitGym shell", () => {
                   expires_at: "2026-05-16T12:10:00.000Z",
                   last_activity_at: "2026-05-16T10:10:00.000Z",
                 },
-              },
+              }
+            : activeSessionPayload,
         ),
       });
     });
@@ -415,6 +414,7 @@ test.describe("GitGym shell", () => {
       const body = JSON.parse(route.request().postData() ?? "{}");
       expect(body).toEqual({ scenario_id: 2 });
       createSessionCalls += 1;
+      shouldGateRefresh = true;
       await route.fulfill({
         status: 201,
         contentType: "application/json",
