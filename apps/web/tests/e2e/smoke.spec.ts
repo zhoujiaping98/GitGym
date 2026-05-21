@@ -140,25 +140,6 @@ async function routeTerminalWebSocketToStub(page: Page, port: number) {
   }, port);
 }
 
-async function dispatchActiveKey(
-  page: Page,
-  key: string,
-  options?: { shiftKey?: boolean },
-) {
-  await page.evaluate(
-    ({ key: nextKey, shiftKey }) => {
-      document.activeElement?.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          bubbles: true,
-          key: nextKey,
-          shiftKey: shiftKey ?? false,
-        }),
-      );
-    },
-    { key, shiftKey: options?.shiftKey },
-  );
-}
-
 async function expectFocusInsideDialog(dialog: Locator, target: Locator) {
   await expect
     .poll(async () => {
@@ -472,13 +453,13 @@ test.describe("GitGym shell", () => {
     await expectNotActiveElement(backgroundNewSessionButton);
     await expectNotActiveElement(backgroundResetButton);
 
-    await dispatchActiveKey(page, "Tab");
+    await startSessionButton.press("Tab");
 
     await expectFocusInsideDialog(dialog, firstOption);
     await expectNotActiveElement(backgroundNewSessionButton);
     await expectNotActiveElement(backgroundResetButton);
 
-    await dispatchActiveKey(page, "Tab", { shiftKey: true });
+    await firstOption.press("Shift+Tab");
     await expectFocusInsideDialog(dialog, startSessionButton);
 
     await startSessionButton.press("Enter");
