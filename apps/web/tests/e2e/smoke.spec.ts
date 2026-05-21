@@ -1,5 +1,5 @@
 import { type AddressInfo } from "node:net";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { WebSocketServer } from "ws";
 
 type TerminalStub = {
@@ -138,6 +138,46 @@ async function routeTerminalWebSocketToStub(page: Page, port: number) {
 
     window.WebSocket = TerminalTestWebSocket as typeof WebSocket;
   }, port);
+}
+
+async function dispatchActiveKey(
+  page: Page,
+  key: string,
+  options?: { shiftKey?: boolean },
+) {
+  await page.evaluate(
+    ({ key: nextKey, shiftKey }) => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          key: nextKey,
+          shiftKey: shiftKey ?? false,
+        }),
+      );
+    },
+    { key, shiftKey: options?.shiftKey },
+  );
+}
+
+async function expectFocusInsideDialog(dialog: Locator, target: Locator) {
+  await expect
+    .poll(async () => {
+      const [activeIsTarget, activeIsInsideDialog] = await Promise.all([
+        target.evaluate((element) => document.activeElement === element),
+        dialog.evaluate((element) => {
+          const activeElement = document.activeElement;
+          return activeElement instanceof HTMLElement && element.contains(activeElement);
+        }),
+      ]);
+      return activeIsTarget && activeIsInsideDialog;
+    })
+    .toBe(true);
+}
+
+async function expectNotActiveElement(target: Locator) {
+  await expect
+    .poll(async () => target.evaluate((element) => document.activeElement !== element))
+    .toBe(true);
 }
 
 test.describe("GitGym shell", () => {
@@ -325,6 +365,135 @@ test.describe("GitGym shell", () => {
     expect(createSessionCalls).toBe(1);
     expect(resetOldSessionCalls).toBe(0);
     expect(resetNewSessionCalls).toBe(1);
+  });
+
+  test("supports keyboard scenario selection and traps focus inside the picker", async ({
+    page,
+  }) => {
+    let currentSessionCalls = 0;
+    let createSessionCalls = 0;
+    let releaseRefresh: (() => void) | null = null;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+
+    await page.route("**/api/v1/practice-sessions/current", async (route) => {
+      currentSessionCalls += 1;
+      if (currentSessionCalls > 2) {
+        await refreshGate;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          currentSessionCalls <= 2
+            ? activeSessionPayload
+            : {
+                session: {
+                  id: 43,
+                  user_id: 7,
+                  scenario_id: 2,
+                  template_id: 1,
+                  runner_ref: "runner-43",
+                  workspace_path: "/tmp/gitgym/session-43",
+                  status: "active",
+                  started_at: "2026-05-16T10:10:00.000Z",
+                  expires_at: "2026-05-16T12:10:00.000Z",
+                  last_activity_at: "2026-05-16T10:10:00.000Z",
+                },
+              },
+        ),
+      });
+    });
+    await page.route("**/api/v1/practice-sessions", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+
+      const body = JSON.parse(route.request().postData() ?? "{}");
+      expect(body).toEqual({ scenario_id: 2 });
+      createSessionCalls += 1;
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          session: {
+            id: 43,
+            user_id: 7,
+            scenario_id: 2,
+            template_id: 1,
+            runner_ref: "runner-43",
+            workspace_path: "/tmp/gitgym/session-43",
+            status: "active",
+            started_at: "2026-05-16T10:10:00.000Z",
+            expires_at: "2026-05-16T12:10:00.000Z",
+            last_activity_at: "2026-05-16T10:10:00.000Z",
+          },
+        }),
+      });
+    });
+
+    await page.goto("/");
+
+    await expect(page.getByText("Session live")).toBeVisible();
+    await expect(page.getByText("runner-42")).toBeVisible();
+
+    const backgroundNewSessionButton = page.getByRole("button", { name: "New Session" });
+    const backgroundResetButton = page.getByRole("button", { name: "Reset" });
+
+    await backgroundNewSessionButton.click();
+
+    const dialog = page.getByRole("dialog", { name: "Choose a practice scenario" });
+    const firstOption = page.getByRole("option", { name: /Standard Sandbox/i });
+    const secondOption = page.getByRole("option", { name: /Recover Branch/i });
+    const cancelButton = page.getByRole("button", { name: "Cancel" });
+    const startSessionButton = page.getByRole("button", { name: "Start Session" });
+
+    await expect(dialog).toBeVisible();
+    await expect(firstOption).toBeFocused();
+    await expect(firstOption).toHaveAttribute("aria-selected", "true");
+    await expect(secondOption).toHaveAttribute("aria-selected", "false");
+
+    await firstOption.press("ArrowDown");
+
+    await expect(secondOption).toBeFocused();
+    await expect(secondOption).toHaveAttribute("aria-selected", "true");
+    await expect(firstOption).toHaveAttribute("aria-selected", "false");
+
+    await secondOption.press("Tab");
+    await expectFocusInsideDialog(dialog, cancelButton);
+    await expectNotActiveElement(backgroundNewSessionButton);
+    await expectNotActiveElement(backgroundResetButton);
+
+    await cancelButton.press("Tab");
+    await expectFocusInsideDialog(dialog, startSessionButton);
+    await expectNotActiveElement(backgroundNewSessionButton);
+    await expectNotActiveElement(backgroundResetButton);
+
+    await dispatchActiveKey(page, "Tab");
+
+    await expectFocusInsideDialog(dialog, firstOption);
+    await expectNotActiveElement(backgroundNewSessionButton);
+    await expectNotActiveElement(backgroundResetButton);
+
+    await dispatchActiveKey(page, "Tab", { shiftKey: true });
+    await expectFocusInsideDialog(dialog, startSessionButton);
+
+    await startSessionButton.press("Enter");
+
+    await expect(
+      page.getByRole("heading", { name: "Checking session" }),
+    ).toBeVisible();
+    releaseRefresh?.();
+    await expect(page.getByText("runner-43")).toBeVisible();
+    await expect(page.getByText("/tmp/gitgym/session-43")).toBeVisible();
+    await expect(page.getByText("session #43")).toBeVisible();
+    await expect(page.getByRole("complementary")).toContainText(
+      /session #43\s*scenario #2\s*template #1/,
+    );
+    expect(createSessionCalls).toBe(1);
   });
 
   test("keeps the terminal interactive across a page refresh", async ({ page }) => {
