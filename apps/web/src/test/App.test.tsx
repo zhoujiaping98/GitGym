@@ -735,41 +735,45 @@ describe("App", () => {
     });
   });
 
-  it("renders a recovery-first catalog unavailable shell", async () => {
+  it("retries only the catalog request from the catalog unavailable shell", async () => {
+    const refresh = vi.fn().mockResolvedValue(null);
+
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: null,
       absenceReason: "missing",
       error: null,
-      refresh: vi.fn().mockResolvedValue(null),
+      refresh,
     });
 
-    mockFetch.mockImplementationOnce(() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ error: "catalog offline" }), {
-          status: 503,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
+    mockFetch
+      .mockRejectedValueOnce(new Error("catalog offline"))
+      .mockResolvedValueOnce(createCatalogResponse());
 
     render(<App />);
 
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Practice catalog unavailable" }),
-      ).toBeInTheDocument();
-    });
-
+    expect(
+      await screen.findByRole("heading", { name: "Practice catalog unavailable" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByText("We couldn’t load the available practice scenarios for this environment."),
     ).toBeInTheDocument();
     expect(screen.getByText("catalog offline")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
     expect(mockCreatePracticeSession).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("heading", { name: "Session unavailable" }),
     ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await waitFor(() => {
+      expect(refresh).not.toHaveBeenCalled();
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+    expect(
+      screen.queryByRole("heading", { name: "Practice catalog unavailable" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Preparing your workspace" })).toBeInTheDocument();
   });
 
   it("blocks session creation when the catalog has no scenarios", async () => {
