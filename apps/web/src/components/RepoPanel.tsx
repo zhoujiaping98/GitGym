@@ -18,11 +18,11 @@ function formatDate(value: string) {
 }
 
 function getHealthLabel(status: TerminalSessionState["status"], sessionStatus: string) {
-  if (status === "unavailable" || status === "error" || status === "connecting") {
+  if (status === "unavailable" || status === "error") {
     return "Recovering";
   }
 
-  if (status === "ready" && sessionStatus === "active") {
+  if ((status === "ready" || status === "connecting") && sessionStatus === "active") {
     return "Live";
   }
 
@@ -30,11 +30,11 @@ function getHealthLabel(status: TerminalSessionState["status"], sessionStatus: s
 }
 
 function getHealthTone(status: TerminalSessionState["status"], sessionStatus: string) {
-  if (status === "unavailable" || status === "error" || status === "connecting") {
+  if (status === "unavailable" || status === "error") {
     return "degraded";
   }
 
-  if (status === "ready" && sessionStatus === "active") {
+  if ((status === "ready" || status === "connecting") && sessionStatus === "active") {
     return "live";
   }
 

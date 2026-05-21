@@ -458,7 +458,7 @@ describe("App", () => {
     expect(screen.getByText("History")).toBeInTheDocument();
   });
 
-  it("marks an active session as recovering while terminal attachment is connecting", async () => {
+  it("marks an active session as live while terminal attachment is connecting", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
@@ -480,7 +480,7 @@ describe("App", () => {
 
     const sessionCard = screen.getByLabelText("Operational session card");
 
-    expect(await within(sessionCard).findByText("Recovering")).toBeInTheDocument();
+    expect(await within(sessionCard).findByText("Live")).toBeInTheDocument();
     expect(within(sessionCard).queryByText("Connecting")).not.toBeInTheDocument();
     expect(within(sessionCard).queryByText("Standby")).not.toBeInTheDocument();
   });
