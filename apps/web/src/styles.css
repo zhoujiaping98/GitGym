@@ -124,7 +124,6 @@ a {
 .top-bar-meta,
 .history-strip,
 .terminal-line,
-.repo-summary,
 .supporting-note {
   font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
 }
@@ -561,58 +560,8 @@ a {
   font-size: 0.84rem;
 }
 
-.repo-summary div {
-  display: grid;
-  gap: 0.2rem;
-}
-
-.repo-summary dt {
-  color: rgba(240, 246, 255, 0.56);
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.repo-summary dd {
-  margin: 0;
-  color: rgba(240, 246, 255, 0.94);
-  font-size: 0.88rem;
-}
-
-.repo-summary-break {
+.repo-state-break {
   overflow-wrap: anywhere;
-}
-
-.commit-rail {
-  display: grid;
-  gap: 0.7rem;
-  margin-top: auto;
-  padding: 0.9rem;
-  border-radius: 0.95rem;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.commit-node {
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  color: rgba(240, 246, 255, 0.84);
-  font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
-  font-size: 0.8rem;
-}
-
-.commit-dot {
-  width: 0.65rem;
-  height: 0.65rem;
-  flex: none;
-  border-radius: 999px;
-  background: var(--accent);
-  box-shadow: 0 0 0 0.25rem rgba(121, 255, 177, 0.09);
-}
-
-.commit-dot-muted {
-  background: rgba(240, 246, 255, 0.44);
-  box-shadow: none;
 }
 
 .history-panel {

@@ -18,35 +18,27 @@ function formatDate(value: string) {
 }
 
 function getHealthLabel(status: TerminalSessionState["status"], sessionStatus: string) {
-  if (status === "unavailable" || status === "error") {
+  if (status === "unavailable" || status === "error" || status === "connecting") {
     return "Recovering";
-  }
-
-  if (status === "connecting") {
-    return "Connecting";
   }
 
   if (status === "ready" && sessionStatus === "active") {
     return "Live";
   }
 
-  return "Standby";
+  return "Recovering";
 }
 
 function getHealthTone(status: TerminalSessionState["status"], sessionStatus: string) {
-  if (status === "unavailable" || status === "error") {
+  if (status === "unavailable" || status === "error" || status === "connecting") {
     return "degraded";
-  }
-
-  if (status === "connecting") {
-    return "pending";
   }
 
   if (status === "ready" && sessionStatus === "active") {
     return "live";
   }
 
-  return "idle";
+  return "degraded";
 }
 
 function formatScenarioName(scenarioName: string | null, scenarioId?: number) {
@@ -125,7 +117,7 @@ export function RepoPanel({
           </div>
           <div>
             <dt>Workspace</dt>
-            <dd className="repo-summary-break">{session.workspacePath}</dd>
+            <dd className="repo-state-break">{session.workspacePath}</dd>
           </div>
           <div>
             <dt>Session ID</dt>

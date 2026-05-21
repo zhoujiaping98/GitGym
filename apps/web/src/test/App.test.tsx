@@ -458,6 +458,33 @@ describe("App", () => {
     expect(screen.getByText("History")).toBeInTheDocument();
   });
 
+  it("marks an active session as recovering while terminal attachment is connecting", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "connecting",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementationOnce(() => createCatalogResponse());
+
+    render(<App />);
+
+    const sessionCard = screen.getByLabelText("Operational session card");
+
+    expect(await within(sessionCard).findByText("Recovering")).toBeInTheDocument();
+    expect(within(sessionCard).queryByText("Connecting")).not.toBeInTheDocument();
+    expect(within(sessionCard).queryByText("Standby")).not.toBeInTheDocument();
+  });
+
   it("supports keyboard scenario selection before confirming a new session", async () => {
     const refresh = vi.fn().mockResolvedValue({
       ...nextSession,
@@ -881,7 +908,9 @@ describe("App", () => {
       screen.queryByRole("link", { name: "Continue with GitHub" }),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Session live")).toBeInTheDocument();
-    expect(screen.getAllByText("Terminal").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("Terminal", { selector: ".workbench-main .panel-header span" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Repository")).toBeInTheDocument();
     expect(screen.getByText("History")).toBeInTheDocument();
     expect(screen.getByText("runner-42")).toBeInTheDocument();
