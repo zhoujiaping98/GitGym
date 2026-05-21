@@ -352,6 +352,7 @@ test.describe("GitGym shell", () => {
     page,
   }) => {
     let createSessionCalls = 0;
+    let gatedReconcileHits = 0;
     let shouldGateRefresh = false;
     let releaseRefresh: (() => void) | null = null;
     const refreshGate = new Promise<void>((resolve) => {
@@ -360,6 +361,7 @@ test.describe("GitGym shell", () => {
 
     await page.route("**/api/v1/practice-sessions/current", async (route) => {
       if (shouldGateRefresh) {
+        gatedReconcileHits += 1;
         await refreshGate;
       }
 
@@ -475,6 +477,7 @@ test.describe("GitGym shell", () => {
       /session #43\s*scenario #2\s*template #1/,
     );
     expect(createSessionCalls).toBe(1);
+    expect(gatedReconcileHits).toBeGreaterThan(0);
   });
 
   test("keeps the terminal interactive across a page refresh", async ({ page }) => {
