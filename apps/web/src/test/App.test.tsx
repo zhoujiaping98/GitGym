@@ -825,6 +825,29 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
   });
 
+  it("opens the existing scenario picker from the workspace unavailable shell", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: null,
+      absenceReason: "orphaned",
+      error: "workspace path is no longer available",
+      refresh: vi.fn().mockResolvedValue(null),
+    });
+
+    mockFetch.mockImplementationOnce(() => createCatalogResponse());
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    expect(
+      await screen.findByRole("dialog", { name: "Choose a practice scenario" }),
+    ).toBeInTheDocument();
+  });
+
   it("renders a loading shell while checking for a current session", () => {
     mockUseCurrentSession.mockReturnValue({
       status: "loading",
