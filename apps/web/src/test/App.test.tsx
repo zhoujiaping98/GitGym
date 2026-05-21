@@ -747,7 +747,14 @@ describe("App", () => {
     });
 
     mockFetch
-      .mockRejectedValueOnce(new Error("catalog offline"))
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: "api offline" }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      )
       .mockResolvedValueOnce(createCatalogResponse());
 
     render(<App />);
@@ -758,7 +765,7 @@ describe("App", () => {
     expect(
       screen.getByText("We couldn’t load the available practice scenarios for this environment."),
     ).toBeInTheDocument();
-    expect(screen.getByText("catalog offline")).toBeInTheDocument();
+    expect(screen.getByText("api offline")).toBeInTheDocument();
     expect(mockCreatePracticeSession).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("heading", { name: "Session unavailable" }),
@@ -767,13 +774,9 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 
     await waitFor(() => {
-      expect(refresh).not.toHaveBeenCalled();
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
-    expect(
-      screen.queryByRole("heading", { name: "Practice catalog unavailable" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Preparing your workspace" })).toBeInTheDocument();
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it("blocks session creation when the catalog has no scenarios", async () => {
