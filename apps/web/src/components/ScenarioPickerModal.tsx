@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 type ScenarioPickerOption = {
   id: number;
@@ -41,6 +42,47 @@ export function ScenarioPickerModal({
     selectedScenarioId === null ? undefined : `${listboxId}-option-${selectedScenarioId}`;
   const dialogRef = useRef<HTMLElement | null>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
+  const optionRefs = useRef(new Map<number, HTMLButtonElement>());
+
+  function focusScenarioAtIndex(index: number) {
+    const boundedIndex = Math.max(0, Math.min(index, scenarios.length - 1));
+    const scenario = scenarios[boundedIndex];
+
+    if (!scenario) {
+      return;
+    }
+
+    optionRefs.current.get(scenario.id)?.focus();
+    onSelect(scenario.id);
+  }
+
+  function handleOptionKeyDown(
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) {
+    switch (event.key) {
+      case "ArrowDown":
+      case "ArrowRight":
+        event.preventDefault();
+        focusScenarioAtIndex(index + 1);
+        return;
+      case "ArrowUp":
+      case "ArrowLeft":
+        event.preventDefault();
+        focusScenarioAtIndex(index - 1);
+        return;
+      case "Home":
+        event.preventDefault();
+        focusScenarioAtIndex(0);
+        return;
+      case "End":
+        event.preventDefault();
+        focusScenarioAtIndex(scenarios.length - 1);
+        return;
+      default:
+        return;
+    }
+  }
 
   useEffect(() => {
     if (open) {
@@ -124,6 +166,15 @@ export function ScenarioPickerModal({
                     className="scenario-picker-option"
                     data-selected={isSelected}
                     onClick={() => onSelect(scenario.id)}
+                    onKeyDown={(event) => handleOptionKeyDown(event, index)}
+                    ref={(element) => {
+                      if (element) {
+                        optionRefs.current.set(scenario.id, element);
+                        return;
+                      }
+
+                      optionRefs.current.delete(scenario.id);
+                    }}
                     role="option"
                     tabIndex={isTabbable ? 0 : -1}
                     type="button"

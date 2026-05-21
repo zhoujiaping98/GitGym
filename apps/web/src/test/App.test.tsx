@@ -387,6 +387,70 @@ describe("App", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("supports keyboard scenario selection before confirming a new session", async () => {
+    const refresh = vi.fn().mockResolvedValue({
+      ...nextSession,
+      scenarioId: 2,
+    });
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh,
+    });
+
+    mockFetch.mockImplementationOnce(() =>
+      createCatalogResponse({
+        templates: defaultCatalog.templates,
+        scenarios: [
+          {
+            id: 1,
+            key: "sandbox-standard",
+            name: "Standard Sandbox",
+            template_id: 1,
+          },
+          {
+            id: 2,
+            key: "sandbox-advanced",
+            name: "Advanced Sandbox",
+            template_id: 1,
+          },
+        ],
+      }),
+    );
+
+    render(<App />);
+
+    await waitForNewSessionAction();
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    await waitForScenarioPicker();
+
+    const firstOption = screen.getByRole("option", { name: /Standard Sandbox/i });
+    const secondOption = screen.getByRole("option", { name: /Advanced Sandbox/i });
+
+    firstOption.focus();
+    expect(firstOption).toHaveFocus();
+
+    fireEvent.keyDown(firstOption, { key: "ArrowDown" });
+
+    await waitFor(() => {
+      expect(secondOption).toHaveFocus();
+      expect(secondOption).toHaveAttribute("aria-selected", "true");
+    });
+    expect(firstOption).toHaveAttribute("aria-selected", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Session" }));
+
+    await waitFor(() => {
+      expect(mockCreatePracticeSession).toHaveBeenCalledWith({
+        scenarioId: 2,
+      });
+    });
+  });
+
   it("keeps create-session failures inside the scenario picker", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
