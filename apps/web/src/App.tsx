@@ -113,7 +113,10 @@ export default function App() {
   const terminalSession = useTerminalSession(displayedSession);
   const hasActiveSession =
     displayedSession !== null && ((currentSession.status === "ready" && !signedOutOverride) || hasSessionOverride);
-  const hasSessionRecoveryState = !hasActiveSession && actionError !== null;
+  const hasSessionRecoveryState =
+    !hasActiveSession &&
+    actionError !== null &&
+    !(currentSession.status === "ready" && currentSession.absenceReason === "unauthenticated");
   const hasAuthenticatedEmptyState =
     !hasSessionRecoveryState &&
     !hasActiveSession &&

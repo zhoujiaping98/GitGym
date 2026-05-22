@@ -963,7 +963,9 @@ describe("App", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText("Signed out")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Session unavailable")).toHaveLength(2);
+    expect(
+      screen.getByText("Session unavailable", { selector: ".session-status-badge" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("The server did not return a current session.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
     expect(
@@ -1041,6 +1043,55 @@ describe("App", () => {
         headers: { "Content-Type": "application/json" },
       }),
     );
+  });
+
+  it("returns to the signed-out login experience when retry sync ends unauthenticated", async () => {
+    const currentSessionState = {
+      status: "ready",
+      session: activeSession,
+      absenceReason: null as "unauthenticated" | null,
+      error: null,
+      refresh: vi.fn(async () => {
+        if (currentSessionState.session?.id === activeSession.id) {
+          currentSessionState.session = mismatchedSession;
+          return mismatchedSession;
+        }
+
+        currentSessionState.session = null;
+        currentSessionState.absenceReason = "unauthenticated";
+        return null;
+      }),
+    };
+
+    mockUseCurrentSession.mockImplementation(() => currentSessionState);
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    render(<App />);
+
+    await waitForNewSessionAction();
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+    await confirmScenarioPicker();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Retry sync" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry sync" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Continue with GitHub" })).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Signed out")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Session unavailable" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New Session" })).not.toBeInTheDocument();
   });
 
   it("renders the live workbench when there is an active session", async () => {
