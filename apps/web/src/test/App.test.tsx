@@ -913,6 +913,54 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders a recovery-first session unavailable shell when no current session can be restored", async () => {
+    const refresh = vi
+      .fn()
+      .mockResolvedValueOnce(mismatchedSession)
+      .mockResolvedValueOnce(null);
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh,
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    render(<App />);
+
+    await waitForNewSessionAction();
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+    await confirmScenarioPicker();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Retry sync" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry sync" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Session unavailable" })).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Session recovery")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Your previous practice session is no longer available. Start a fresh session to keep practicing.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("The server did not return a current session.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
   it("renders the live workbench when there is an active session", async () => {
     const refresh = vi.fn().mockResolvedValue(nextSession);
     const reconnect = vi.fn();

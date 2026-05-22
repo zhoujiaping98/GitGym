@@ -89,7 +89,9 @@ function AppStateShell({
 
 export default function App() {
   const currentSession = useCurrentSession();
-  const [sessionOverride, setSessionOverride] = useState<PracticeSession | null>(null);
+  const [sessionOverride, setSessionOverride] = useState<PracticeSession | null | undefined>(
+    undefined,
+  );
   const [actionError, setActionError] = useState<ActionErrorState | null>(null);
   const [pendingAction, setPendingAction] = useState<"reset" | "new-session" | "logout" | null>(null);
   const [hasAttemptedAutoCreate, setHasAttemptedAutoCreate] = useState(false);
@@ -105,11 +107,11 @@ export default function App() {
   });
   const unavailableRefreshSessionIdRef = useRef<number | null>(null);
   const effectiveSession = signedOutOverride ? null : currentSession.session;
-  const displayedSession = sessionOverride ?? effectiveSession;
+  const displayedSession = sessionOverride === undefined ? effectiveSession : sessionOverride;
   const terminalSession = useTerminalSession(displayedSession);
   const hasActiveSession =
     displayedSession !== null &&
-    ((currentSession.status === "ready" && !signedOutOverride) || sessionOverride !== null);
+    ((currentSession.status === "ready" && !signedOutOverride) || sessionOverride !== undefined);
   const hasAuthenticatedEmptyState =
     !hasActiveSession &&
     !signedOutOverride &&
@@ -166,7 +168,7 @@ export default function App() {
       currentSession.status === "ready" &&
       effectiveSession?.id === sessionOverride.id
     ) {
-      setSessionOverride(null);
+      setSessionOverride(undefined);
     }
   }, [currentSession.status, effectiveSession, sessionOverride]);
 
@@ -598,16 +600,24 @@ export default function App() {
             openScenarioPicker("orphaned");
           }}
         />
-      ) : currentSession.status === "error" || actionError ? (
+      ) : actionError ? (
         <AppStateShell
-          eyebrow={actionError ? "Session reconciliation" : "Session lookup"}
+          eyebrow="Session recovery"
           title="Session unavailable"
-          body={
-            actionError
-              ? "We could not reconcile your current practice session."
-              : "We could not restore your current practice session."
-          }
-          detail={actionError?.message ?? currentSession.error}
+          body="Your previous practice session is no longer available. Start a fresh session to keep practicing."
+          detail={actionError.message}
+          actionLabel="New Session"
+          onAction={() => {
+            setHasAttemptedAutoCreate(true);
+            openScenarioPicker("orphaned");
+          }}
+        />
+      ) : currentSession.status === "error" ? (
+        <AppStateShell
+          eyebrow="Session lookup"
+          title="Session unavailable"
+          body="We could not restore your current practice session."
+          detail={currentSession.error}
           actionLabel="Try again"
           onAction={() => {
             setActionError(null);
