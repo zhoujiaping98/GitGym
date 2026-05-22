@@ -779,7 +779,7 @@ describe("App", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("blocks session creation when the catalog has no scenarios", async () => {
+  it("renders an administrative empty state when the catalog has no scenarios", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: null,
