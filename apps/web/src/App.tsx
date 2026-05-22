@@ -564,7 +564,7 @@ export default function App() {
         <AppStateShell
           eyebrow="Catalog empty"
           title="Practice catalog empty"
-          body="There are no practice scenarios available for this environment."
+          body="This environment doesn’t have any published practice scenarios yet."
           detail="Ask an administrator to publish at least one scenario before creating a session."
         />
       ) : shouldShowPassiveEmptyState ? (
