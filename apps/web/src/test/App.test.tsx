@@ -811,8 +811,13 @@ describe("App", () => {
         "Ask an administrator to publish at least one scenario before creating a session.",
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Try again" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "New Session" }),
+    ).not.toBeInTheDocument();
     expect(mockCreatePracticeSession).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "New Session" })).not.toBeInTheDocument();
   });
 
   it("renders a recovery-first workspace unavailable shell for orphaned sessions", async () => {
