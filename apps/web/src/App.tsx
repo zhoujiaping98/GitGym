@@ -103,6 +103,8 @@ export default function App() {
     catalog: null,
     error: null,
   });
+  const [pendingScenarioPickerSource, setPendingScenarioPickerSource] =
+    useState<ScenarioPickerSource | null>(null);
   const [scenarioPickerState, setScenarioPickerState] = useState<ScenarioPickerState>({
     status: "closed",
   });
@@ -239,6 +241,15 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    if (!pendingScenarioPickerSource || !canUseScenarioPicker) {
+      return;
+    }
+
+    setPendingScenarioPickerSource(null);
+    openScenarioPicker(pendingScenarioPickerSource);
+  }, [canUseScenarioPicker, pendingScenarioPickerSource]);
+
+  useEffect(() => {
     if (!displayedSession || terminalSession.status !== "unavailable") {
       unavailableRefreshSessionIdRef.current = null;
       return;
@@ -259,6 +270,27 @@ export default function App() {
 
     setScenarioPickerState({ status: "closed" });
   }, [canUseScenarioPicker, scenarioPickerState.status]);
+
+  useEffect(() => {
+    if (!pendingScenarioPickerSource) {
+      return;
+    }
+
+    if (
+      signedOutOverride ||
+      currentSession.status !== "ready" ||
+      currentSession.absenceReason === "unauthenticated" ||
+      (!hasSessionRecoveryState && pendingScenarioPickerSource === "orphaned")
+    ) {
+      setPendingScenarioPickerSource(null);
+    }
+  }, [
+    currentSession.absenceReason,
+    currentSession.status,
+    hasSessionRecoveryState,
+    pendingScenarioPickerSource,
+    signedOutOverride,
+  ]);
 
   async function reconcileSessionAction(
     action: "reset" | "new-session",
@@ -355,9 +387,11 @@ export default function App() {
 
   function openScenarioPicker(source: ScenarioPickerSource) {
     if (!canUseScenarioPicker) {
+      setPendingScenarioPickerSource(source);
       return;
     }
 
+    setPendingScenarioPickerSource(null);
     setActionError(null);
     setScenarioPickerState({
       status: "open",

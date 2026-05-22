@@ -974,7 +974,7 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 
-  it("renders the recovery-first session unavailable shell before catalog loading state can take over", async () => {
+  it("opens the existing scenario picker after clicking new session during recovery while the catalog is still loading", async () => {
     let resolveCatalogRequest: ((response: Response) => void) | null = null;
     const currentSessionState = {
       status: "ready",
@@ -1027,7 +1027,10 @@ describe("App", () => {
 
     expect(screen.getByText("Session recovery")).toBeInTheDocument();
     expect(screen.queryByText("Loading practice catalog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+    expect(
+      screen.queryByRole("dialog", { name: "Choose a practice scenario" }),
+    ).not.toBeInTheDocument();
 
     resolveCatalogRequest?.(
       new Response(JSON.stringify({
@@ -1043,6 +1046,12 @@ describe("App", () => {
         headers: { "Content-Type": "application/json" },
       }),
     );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("dialog", { name: "Choose a practice scenario" }),
+      ).toBeInTheDocument();
+    });
   });
 
   it("returns to the signed-out login experience when retry sync ends unauthenticated", async () => {
