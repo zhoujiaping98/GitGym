@@ -13,3 +13,4 @@ tmp/
 var/
 .tmp-*.log
 .codex-review-*/
+.worktrees/
