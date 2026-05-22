@@ -387,7 +387,9 @@ export default function App() {
 
   function openScenarioPicker(source: ScenarioPickerSource) {
     if (!canUseScenarioPicker) {
-      setPendingScenarioPickerSource(source);
+      if (source === "orphaned" && hasSessionRecoveryState) {
+        setPendingScenarioPickerSource(source);
+      }
       return;
     }
 
