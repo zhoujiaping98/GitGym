@@ -488,6 +488,8 @@ export default function App() {
   const sessionTone =
     hasActiveSession
       ? "active"
+      : hasSessionRecoveryState
+      ? "error"
       : hasOrphanedSessionState
       ? "error"
       : currentSession.status === "loading"
@@ -498,6 +500,8 @@ export default function App() {
   const sessionLabel =
     hasActiveSession
       ? "Session live"
+      : hasSessionRecoveryState
+        ? "Session unavailable"
       : signedOutOverride
         ? "Signed out"
       : hasOrphanedSessionState
@@ -551,6 +555,18 @@ export default function App() {
           title="Checking session"
           body="Restoring your practice workbench."
         />
+      ) : hasSessionRecoveryState ? (
+        <AppStateShell
+          eyebrow="Session recovery"
+          title="Session unavailable"
+          body="Your previous practice session is no longer available. Start a fresh session to keep practicing."
+          detail={actionError.message}
+          actionLabel="New Session"
+          onAction={() => {
+            setHasAttemptedAutoCreate(true);
+            openScenarioPicker("orphaned");
+          }}
+        />
       ) : catalogState.status === "loading" && shouldShowCatalogState ? (
         <AppStateShell
           eyebrow="Catalog readying"
@@ -579,18 +595,6 @@ export default function App() {
           title="Preparing your workspace"
           body="Creating a disposable sandbox so you can land directly in the terminal."
           detail="We will start you in the first available practice scenario."
-        />
-      ) : hasSessionRecoveryState ? (
-        <AppStateShell
-          eyebrow="Session recovery"
-          title="Session unavailable"
-          body="Your previous practice session is no longer available. Start a fresh session to keep practicing."
-          detail={actionError.message}
-          actionLabel="New Session"
-          onAction={() => {
-            setHasAttemptedAutoCreate(true);
-            openScenarioPicker("orphaned");
-          }}
         />
       ) : hasAuthenticatedEmptyState ? (
         <AppStateShell

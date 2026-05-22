@@ -962,12 +962,85 @@ describe("App", () => {
         "Your previous practice session is no longer available. Start a fresh session to keep practicing.",
       ),
     ).toBeInTheDocument();
+    expect(screen.queryByText("Signed out")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Session unavailable")).toHaveLength(2);
     expect(screen.getByText("The server did not return a current session.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Create your first practice session" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("renders the recovery-first session unavailable shell before catalog loading state can take over", async () => {
+    let resolveCatalogRequest: ((response: Response) => void) | null = null;
+    const currentSessionState = {
+      status: "ready",
+      session: activeSession,
+      absenceReason: null as "missing" | null,
+      error: null,
+      refresh: vi.fn(async () => {
+        if (currentSessionState.session?.id === activeSession.id) {
+          currentSessionState.session = mismatchedSession;
+          return mismatchedSession;
+        }
+
+        currentSessionState.session = null;
+        currentSessionState.absenceReason = "missing";
+        return null;
+      }),
+    };
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).endsWith("/api/v1/templates")) {
+        return new Promise<Response>((resolve) => {
+          resolveCatalogRequest = resolve;
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${String(input)}`);
+    });
+
+    mockUseCurrentSession.mockImplementation(() => currentSessionState);
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Retry sync" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry sync" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Session unavailable" })).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Session recovery")).toBeInTheDocument();
+    expect(screen.queryByText("Loading practice catalog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
+
+    resolveCatalogRequest?.(
+      new Response(JSON.stringify({
+        templates: defaultCatalog.templates,
+        scenarios: defaultCatalog.scenarios.map((scenario) => ({
+          id: scenario.id,
+          key: scenario.key,
+          name: scenario.name,
+          template_id: scenario.templateId,
+        })),
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
   });
 
   it("renders the live workbench when there is an active session", async () => {
