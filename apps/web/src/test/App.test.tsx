@@ -1054,6 +1054,76 @@ describe("App", () => {
     });
   });
 
+  it("shows the retryable catalog-unavailable shell when catalog loading fails during recovery", async () => {
+    let rejectCatalogRequest: ((error: Error) => void) | null = null;
+    const currentSessionState = {
+      status: "ready",
+      session: activeSession,
+      absenceReason: null as "missing" | null,
+      error: null,
+      refresh: vi.fn(async () => {
+        if (currentSessionState.session?.id === activeSession.id) {
+          currentSessionState.session = mismatchedSession;
+          return mismatchedSession;
+        }
+
+        currentSessionState.session = null;
+        currentSessionState.absenceReason = "missing";
+        return null;
+      }),
+    };
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).endsWith("/api/v1/templates")) {
+        return new Promise<Response>((_resolve, reject) => {
+          rejectCatalogRequest = reject;
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${String(input)}`);
+    });
+
+    mockUseCurrentSession.mockImplementation(() => currentSessionState);
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Retry sync" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry sync" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Session unavailable" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    await act(async () => {
+      rejectCatalogRequest?.(new Error("catalog offline"));
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Practice catalog unavailable" }),
+      ).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("catalog offline")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Session unavailable" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("returns to the signed-out login experience when retry sync ends unauthenticated", async () => {
     const currentSessionState = {
       status: "ready",

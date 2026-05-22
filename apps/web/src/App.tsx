@@ -152,6 +152,8 @@ export default function App() {
     shouldShowCatalogState &&
     catalogState.status === "ready" &&
     defaultScenario === null;
+  const shouldShowRecoveryShell =
+    hasSessionRecoveryState && catalogState.status !== "error" && !hasEmptyCatalogState;
   const canUseScenarioPicker =
     !signedOutOverride &&
     currentSession.status === "ready" &&
@@ -280,14 +282,14 @@ export default function App() {
       signedOutOverride ||
       currentSession.status !== "ready" ||
       currentSession.absenceReason === "unauthenticated" ||
-      (!hasSessionRecoveryState && pendingScenarioPickerSource === "orphaned")
+      (!shouldShowRecoveryShell && pendingScenarioPickerSource === "orphaned")
     ) {
       setPendingScenarioPickerSource(null);
     }
   }, [
+    shouldShowRecoveryShell,
     currentSession.absenceReason,
     currentSession.status,
-    hasSessionRecoveryState,
     pendingScenarioPickerSource,
     signedOutOverride,
   ]);
@@ -387,7 +389,7 @@ export default function App() {
 
   function openScenarioPicker(source: ScenarioPickerSource) {
     if (!canUseScenarioPicker) {
-      if (source === "orphaned" && hasSessionRecoveryState) {
+      if (source === "orphaned" && shouldShowRecoveryShell) {
         setPendingScenarioPickerSource(source);
       }
       return;
@@ -594,7 +596,7 @@ export default function App() {
           title="Checking session"
           body="Restoring your practice workbench."
         />
-      ) : hasSessionRecoveryState ? (
+      ) : shouldShowRecoveryShell ? (
         <AppStateShell
           eyebrow="Session recovery"
           title="Session unavailable"
