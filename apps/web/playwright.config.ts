@@ -1,5 +1,9 @@
 import { defineConfig } from "@playwright/test";
 
+const reuseExistingServer =
+  process.env.PLAYWRIGHT_REUSE_WEB_SERVER === "1" ||
+  process.env.PLAYWRIGHT_REUSE_WEB_SERVER === "true";
+
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
@@ -10,6 +14,6 @@ export default defineConfig({
   webServer: {
     command: "node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4173",
     port: 4173,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer,
   },
 });
