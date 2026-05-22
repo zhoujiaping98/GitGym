@@ -806,6 +806,11 @@ describe("App", () => {
     expect(
       screen.getByText("This environment doesn’t have any published practice scenarios yet."),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Ask an administrator to publish at least one scenario before creating a session.",
+      ),
+    ).toBeInTheDocument();
     expect(mockCreatePracticeSession).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "New Session" })).not.toBeInTheDocument();
   });
