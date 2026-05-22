@@ -89,6 +89,7 @@ function AppStateShell({
 
 export default function App() {
   const currentSession = useCurrentSession();
+  // `undefined` follows the hook-provided current session; `null` intentionally suppresses it.
   const [sessionOverride, setSessionOverride] = useState<PracticeSession | null | undefined>(
     undefined,
   );
@@ -107,17 +108,20 @@ export default function App() {
   });
   const unavailableRefreshSessionIdRef = useRef<number | null>(null);
   const effectiveSession = signedOutOverride ? null : currentSession.session;
-  const displayedSession = sessionOverride === undefined ? effectiveSession : sessionOverride;
+  const hasSessionOverride = sessionOverride !== undefined;
+  const displayedSession = hasSessionOverride ? sessionOverride : effectiveSession;
   const terminalSession = useTerminalSession(displayedSession);
   const hasActiveSession =
-    displayedSession !== null &&
-    ((currentSession.status === "ready" && !signedOutOverride) || sessionOverride !== undefined);
+    displayedSession !== null && ((currentSession.status === "ready" && !signedOutOverride) || hasSessionOverride);
+  const hasSessionRecoveryState = !hasActiveSession && actionError !== null;
   const hasAuthenticatedEmptyState =
+    !hasSessionRecoveryState &&
     !hasActiveSession &&
     !signedOutOverride &&
     currentSession.status === "ready" &&
     currentSession.absenceReason === "missing";
   const hasOrphanedSessionState =
+    !hasSessionRecoveryState &&
     !hasActiveSession &&
     !signedOutOverride &&
     currentSession.status === "ready" &&
@@ -576,6 +580,18 @@ export default function App() {
           body="Creating a disposable sandbox so you can land directly in the terminal."
           detail="We will start you in the first available practice scenario."
         />
+      ) : hasSessionRecoveryState ? (
+        <AppStateShell
+          eyebrow="Session recovery"
+          title="Session unavailable"
+          body="Your previous practice session is no longer available. Start a fresh session to keep practicing."
+          detail={actionError.message}
+          actionLabel="New Session"
+          onAction={() => {
+            setHasAttemptedAutoCreate(true);
+            openScenarioPicker("orphaned");
+          }}
+        />
       ) : hasAuthenticatedEmptyState ? (
         <AppStateShell
           eyebrow="Workspace ready"
@@ -594,18 +610,6 @@ export default function App() {
           title="Workspace unavailable"
           body="Your previous sandbox can no longer be reopened. Start a fresh session to keep practicing."
           detail={actionError?.message ?? currentSession.error}
-          actionLabel="New Session"
-          onAction={() => {
-            setHasAttemptedAutoCreate(true);
-            openScenarioPicker("orphaned");
-          }}
-        />
-      ) : actionError ? (
-        <AppStateShell
-          eyebrow="Session recovery"
-          title="Session unavailable"
-          body="Your previous practice session is no longer available. Start a fresh session to keep practicing."
-          detail={actionError.message}
           actionLabel="New Session"
           onAction={() => {
             setHasAttemptedAutoCreate(true);

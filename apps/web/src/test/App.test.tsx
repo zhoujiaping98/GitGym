@@ -914,18 +914,24 @@ describe("App", () => {
   });
 
   it("renders a recovery-first session unavailable shell when no current session can be restored", async () => {
-    const refresh = vi
-      .fn()
-      .mockResolvedValueOnce(mismatchedSession)
-      .mockResolvedValueOnce(null);
-
-    mockUseCurrentSession.mockReturnValue({
+    const currentSessionState = {
       status: "ready",
       session: activeSession,
-      absenceReason: null,
+      absenceReason: null as "missing" | null,
       error: null,
-      refresh,
-    });
+      refresh: vi.fn(async () => {
+        if (currentSessionState.session?.id === activeSession.id) {
+          currentSessionState.session = mismatchedSession;
+          return mismatchedSession;
+        }
+
+        currentSessionState.session = null;
+        currentSessionState.absenceReason = "missing";
+        return null;
+      }),
+    };
+
+    mockUseCurrentSession.mockImplementation(() => currentSessionState);
 
     mockUseTerminalSession.mockReturnValue(
       createTerminalState({
@@ -958,6 +964,9 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("The server did not return a current session.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New Session" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Create your first practice session" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 
