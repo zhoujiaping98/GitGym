@@ -395,25 +395,35 @@ describe("App", () => {
       refresh,
     });
 
-    mockFetch.mockImplementationOnce(() =>
-      createCatalogResponse({
-        templates: defaultCatalog.templates,
-        scenarios: [
-          {
-            id: 1,
-            key: "sandbox-standard",
-            name: "Standard Sandbox",
-            template_id: 1,
-          },
-          {
-            id: 2,
-            key: "sandbox-advanced",
-            name: "Advanced Sandbox",
-            template_id: 1,
-          },
-        ],
-      }),
-    );
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse({
+          templates: defaultCatalog.templates,
+          scenarios: [
+            {
+              id: 1,
+              key: "sandbox-standard",
+              name: "Standard Sandbox",
+              template_id: 1,
+            },
+            {
+              id: 2,
+              key: "sandbox-advanced",
+              name: "Advanced Sandbox",
+              template_id: 1,
+            },
+          ],
+        });
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse(defaultRepoStatePayload);
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
 
     render(<App />);
 
@@ -694,25 +704,35 @@ describe("App", () => {
       refresh,
     });
 
-    mockFetch.mockImplementationOnce(() =>
-      createCatalogResponse({
-        templates: defaultCatalog.templates,
-        scenarios: [
-          {
-            id: 1,
-            key: "sandbox-standard",
-            name: "Standard Sandbox",
-            template_id: 1,
-          },
-          {
-            id: 2,
-            key: "sandbox-advanced",
-            name: "Advanced Sandbox",
-            template_id: 1,
-          },
-        ],
-      }),
-    );
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse({
+          templates: defaultCatalog.templates,
+          scenarios: [
+            {
+              id: 1,
+              key: "sandbox-standard",
+              name: "Standard Sandbox",
+              template_id: 1,
+            },
+            {
+              id: 2,
+              key: "sandbox-advanced",
+              name: "Advanced Sandbox",
+              template_id: 1,
+            },
+          ],
+        });
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse(defaultRepoStatePayload);
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
 
     render(<App />);
 
