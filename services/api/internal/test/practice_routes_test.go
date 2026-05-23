@@ -25,6 +25,7 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 	authStore := authStoreWithSession("persisted-route-token", 42)
 	router := httpx.NewRouter(httpx.Dependencies{
 		PracticeService: &stubPracticeService{},
+		RunnerClient:    &stubRunnerClient{},
 		AuthStore:       authStore,
 	})
 
@@ -40,6 +41,7 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 			{name: "current session", method: http.MethodGet, target: "/api/v1/practice-sessions/current", status: http.StatusNotFound},
 			{name: "create session", method: http.MethodPost, target: "/api/v1/practice-sessions", body: []byte(`{"scenario_id":1}`), status: http.StatusCreated},
 			{name: "reset session", method: http.MethodPost, target: "/api/v1/practice-sessions/123/reset", status: http.StatusAccepted},
+			{name: "repo state route", method: http.MethodGet, target: "/api/v1/practice-sessions/123/repo-state", status: http.StatusNotFound},
 			{name: "terminal route", method: http.MethodGet, target: "/api/v1/practice-sessions/123/terminal", status: http.StatusNotFound},
 		}
 
@@ -134,6 +136,17 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 		}
 	})
 
+	t.Run("repo state remains protected without cookie", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/123/repo-state", nil)
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", rec.Code)
+		}
+	})
+
 	t.Run("legacy planned mismatches are not mounted", func(t *testing.T) {
 		cases := []struct {
 			method string
@@ -156,6 +169,100 @@ func TestPracticeRoutesMatchPlanSurface(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestPracticeSessionRepoStateReturnsSnapshot(t *testing.T) {
+	t.Parallel()
+
+	capturedAt := time.Date(2026, 5, 23, 4, 0, 0, 0, time.UTC)
+	router := httpx.NewRouter(httpx.Dependencies{
+		PracticeService: &stubPracticeService{
+			practiceSessionByIDFunc: func(context.Context, uint64, uint64) (domain.PracticeSession, error) {
+				return domain.PracticeSession{
+					ID:        123,
+					UserID:    42,
+					RunnerRef: "ws-repo",
+					Status:    service.PracticeSessionStatusActive,
+				}, nil
+			},
+		},
+		RunnerClient: &stubRunnerClient{
+			repoState: runner.RepoState{
+				BranchName:    "feature/repo-panel",
+				HeadCommit:    "6f9bc9e2f9e3f4f24b88a1d8d76d8ef0f1b1c6a0",
+				StatusSummary: []string{"M notes.txt", "?? scratch.md"},
+				CapturedAt:    capturedAt,
+			},
+		},
+		AuthStore: authStoreWithSession("repo-state-token", 42),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/123/repo-state", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "repo-state-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Data struct {
+			Branch       string   `json:"branch"`
+			HeadCommit   string   `json:"head_commit"`
+			Dirty        bool     `json:"dirty"`
+			ChangedFiles []string `json:"changed_files"`
+			CapturedAt   string   `json:"captured_at"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal repo-state payload: %v", err)
+	}
+	if payload.Data.Branch != "feature/repo-panel" {
+		t.Fatalf("expected branch to round-trip, got %q", payload.Data.Branch)
+	}
+	if payload.Data.HeadCommit != "6f9bc9e2f9e3f4f24b88a1d8d76d8ef0f1b1c6a0" {
+		t.Fatalf("expected head commit to round-trip, got %q", payload.Data.HeadCommit)
+	}
+	if !payload.Data.Dirty {
+		t.Fatalf("expected dirty repo-state payload, got %+v", payload.Data)
+	}
+	if len(payload.Data.ChangedFiles) != 2 {
+		t.Fatalf("expected changed files to round-trip, got %+v", payload.Data.ChangedFiles)
+	}
+	if payload.Data.CapturedAt != capturedAt.Format(time.RFC3339) {
+		t.Fatalf("expected captured_at %q, got %q", capturedAt.Format(time.RFC3339), payload.Data.CapturedAt)
+	}
+}
+
+func TestPracticeSessionRepoStateMapsMissingWorkspaceToGone(t *testing.T) {
+	t.Parallel()
+
+	router := httpx.NewRouter(httpx.Dependencies{
+		PracticeService: &stubPracticeService{
+			practiceSessionByIDFunc: func(context.Context, uint64, uint64) (domain.PracticeSession, error) {
+				return domain.PracticeSession{
+					ID:        123,
+					UserID:    42,
+					RunnerRef: "ws-missing",
+					Status:    service.PracticeSessionStatusActive,
+				}, nil
+			},
+		},
+		RunnerClient: &stubRunnerClient{repoStateErr: runner.ErrWorkspaceNotFound},
+		AuthStore:    authStoreWithSession("repo-gone-token", 42),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/123/repo-state", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "repo-gone-token"})
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d with body %s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestListPracticeCatalogReturnsTemplatesAndScenarios(t *testing.T) {
