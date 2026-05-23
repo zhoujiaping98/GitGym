@@ -23,6 +23,13 @@ type Workspace struct {
 	Template string `json:"template"`
 }
 
+type RepoState struct {
+	BranchName    string    `json:"branch_name"`
+	HeadCommit    string    `json:"head_commit"`
+	StatusSummary []string  `json:"status_summary"`
+	CapturedAt    time.Time `json:"captured_at"`
+}
+
 type TerminalConnection interface {
 	Read(ctx context.Context) (int, []byte, error)
 	Write(ctx context.Context, messageType int, payload []byte) error
@@ -31,6 +38,7 @@ type TerminalConnection interface {
 
 type Client interface {
 	CreateWorkspace(ctx context.Context, template string) (Workspace, error)
+	GetRepoState(ctx context.Context, workspaceID string) (RepoState, error)
 	ResetWorkspace(ctx context.Context, workspaceID string) error
 	ConnectTerminal(ctx context.Context, workspaceID string) (TerminalConnection, error)
 	DeleteWorkspace(ctx context.Context, workspaceID string, reason string, deleteAfter time.Duration) error
@@ -90,6 +98,45 @@ func (c *HTTPClient) CreateWorkspace(ctx context.Context, template string) (Work
 	}
 
 	return workspace, nil
+}
+
+func (c *HTTPClient) GetRepoState(ctx context.Context, workspaceID string) (RepoState, error) {
+	if c.baseURL == "" {
+		return RepoState{}, ErrClientNotConfigured
+	}
+	if strings.TrimSpace(workspaceID) == "" {
+		return RepoState{}, fmt.Errorf("workspace ID is required")
+	}
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		c.baseURL+"/internal/workspaces/"+url.PathEscape(workspaceID)+"/repo-state",
+		nil,
+	)
+	if err != nil {
+		return RepoState{}, fmt.Errorf("build repo state request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return RepoState{}, fmt.Errorf("get runner repo state: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusNotFound {
+			return RepoState{}, ErrWorkspaceNotFound
+		}
+		return RepoState{}, fmt.Errorf("runner get repo state returned status %d", resp.StatusCode)
+	}
+
+	var repoState RepoState
+	if err := json.NewDecoder(resp.Body).Decode(&repoState); err != nil {
+		return RepoState{}, fmt.Errorf("decode repo state response: %w", err)
+	}
+
+	return repoState, nil
 }
 
 func (c *HTTPClient) ResetWorkspace(ctx context.Context, workspaceID string) error {

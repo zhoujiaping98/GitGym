@@ -15,6 +15,7 @@ func NewRouter(workRoot string) http.Handler {
 	r.Get("/healthz", handlers.Health())
 	r.Post("/internal/workspaces", handlers.CreateWorkspace(workRoot))
 	r.Post("/internal/workspaces/{workspaceID}/commands", handlers.RunCommand(workRoot))
+	r.Get("/internal/workspaces/{workspaceID}/repo-state", handlers.RepoState(workRoot))
 	r.Post("/internal/workspaces/{workspaceID}/reset", handlers.ResetWorkspace(workRoot))
 	r.Delete("/internal/workspaces/{workspaceID}", handlers.DeleteWorkspace(workRoot, terminalManager, cleanupManager))
 	r.Get("/internal/workspaces/{workspaceID}/terminal", handlers.TerminalWebSocket(workRoot, terminalManager))
