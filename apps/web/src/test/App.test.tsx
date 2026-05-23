@@ -149,6 +149,19 @@ const defaultRepoStatePayload = {
   },
 } as const;
 
+const reconciledSession = {
+  id: 42,
+  userId: 7,
+  scenarioId: 1,
+  templateId: 1,
+  runnerRef: "runner-42",
+  workspacePath: "/tmp/gitgym/session-42",
+  status: "active",
+  startedAt: "2026-05-16T10:15:00.000Z",
+  expiresAt: "2026-05-16T12:15:00.000Z",
+  lastActivityAt: "2026-05-16T10:15:00.000Z",
+} as const;
+
 function createCatalogResponse(
   catalog: {
     templates: Array<{ id: number; key: string; name: string }>;
@@ -495,6 +508,71 @@ describe("App", () => {
     expect(within(sessionCard).getByText("6f9bc9e")).toBeInTheDocument();
     expect(within(sessionCard).getByText("Working tree")).toBeInTheDocument();
     expect(within(sessionCard).getByText("Clean")).toBeInTheDocument();
+  });
+
+  it("refreshes repo snapshot when the same session id is reconciled with a new session object", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    let repoStateRequestCount = 0;
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        return createJsonResponse(
+          repoStateRequestCount === 1
+            ? defaultRepoStatePayload
+            : {
+                data: {
+                  branch: "reset/main",
+                  head_commit: "bbbbbbb2f9e3f4f24b88a1d8d76d8ef0f1b1c6a0",
+                  dirty: true,
+                  changed_files: ["M notes.txt"],
+                  captured_at: "2026-05-23T04:02:00.000Z",
+                },
+              },
+        );
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    const { rerender } = render(<App />);
+
+    const sessionCard = await screen.findByLabelText("Operational session card");
+    expect(await within(sessionCard).findByText("main")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("Clean")).toBeInTheDocument();
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: reconciledSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(reconciledSession),
+    });
+
+    rerender(<App />);
+
+    expect(await within(sessionCard).findByText("reset/main")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("Dirty")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("M notes.txt")).toBeInTheDocument();
   });
 
   it("renders an inline unavailable repo state when the snapshot cannot be loaded", async () => {

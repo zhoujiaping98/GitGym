@@ -46,7 +46,7 @@ export function useRepoState(session: PracticeSession | null): RepoStateView {
       });
 
     return () => controller.abort();
-  }, [session?.id]);
+  }, [session]);
 
   return state;
 }
