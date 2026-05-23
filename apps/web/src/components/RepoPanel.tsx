@@ -1,4 +1,4 @@
-import type { PracticeSession, TerminalSessionState } from "../types";
+import type { PracticeSession, RepoStateView, TerminalSessionState } from "../types";
 
 type RepoPanelProps = {
   preview?: boolean;
@@ -6,6 +6,7 @@ type RepoPanelProps = {
   scenarioName?: string | null;
   templateName?: string | null;
   terminalStatus?: TerminalSessionState["status"];
+  repoState?: RepoStateView;
 };
 
 function formatDate(value: string) {
@@ -57,12 +58,17 @@ function formatTemplateName(templateName: string | null, templateId?: number) {
   return templateId ? `Template #${templateId}` : "Template unavailable";
 }
 
+function shortHead(headCommit: string) {
+  return headCommit.slice(0, 7);
+}
+
 export function RepoPanel({
   preview = false,
   session,
   scenarioName = null,
   templateName = null,
   terminalStatus = "idle",
+  repoState = { status: "idle", snapshot: null, error: null },
 }: RepoPanelProps) {
   if (preview || !session) {
     return (
@@ -129,6 +135,44 @@ export function RepoPanel({
             </div>
           ))}
         </dl>
+        <section className="repo-state-snapshot-shell" aria-label="Repository snapshot">
+          <div className="repo-state-snapshot-header">
+            <strong>Repository snapshot</strong>
+            {repoState.status === "loading" ? (
+              <span className="repo-state-inline-note">Loading repository state...</span>
+            ) : null}
+            {repoState.status === "error" ? (
+              <span className="repo-state-inline-note">Repository state unavailable.</span>
+            ) : null}
+          </div>
+          {repoState.status === "ready" ? (
+            <>
+              <dl className="repo-state-snapshot">
+                <div>
+                  <dt>Branch</dt>
+                  <dd>{repoState.snapshot.branch}</dd>
+                </div>
+                <div>
+                  <dt>HEAD</dt>
+                  <dd title={repoState.snapshot.headCommit}>
+                    {shortHead(repoState.snapshot.headCommit)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Working tree</dt>
+                  <dd>{repoState.snapshot.dirty ? "Dirty" : "Clean"}</dd>
+                </div>
+              </dl>
+              {repoState.snapshot.dirty ? (
+                <ul className="repo-state-changes" aria-label="Changed files">
+                  {repoState.snapshot.changedFiles.map((entry) => (
+                    <li key={entry}>{entry}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </>
+          ) : null}
+        </section>
       </section>
     </aside>
   );

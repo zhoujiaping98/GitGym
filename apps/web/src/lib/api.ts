@@ -3,6 +3,7 @@ import type {
   PracticeScenario,
   PracticeSession,
   PracticeTemplate,
+  RepoStateSnapshot,
   SessionAbsenceReason,
 } from "../types";
 
@@ -53,6 +54,16 @@ type SessionResponse = {
   ended_at?: string | null;
   expires_at: string;
   last_activity_at: string;
+};
+
+type RepoStateResponse = {
+  data: {
+    branch: string;
+    head_commit: string;
+    dirty: boolean;
+    changed_files: string[];
+    captured_at: string;
+  };
 };
 
 function toPracticeTemplate(template: CatalogResponse["templates"][number]): PracticeTemplate {
@@ -118,6 +129,16 @@ function toPracticeSession(session: SessionResponse): PracticeSession {
     endedAt: session.ended_at ?? null,
     expiresAt: session.expires_at,
     lastActivityAt: session.last_activity_at,
+  };
+}
+
+function toRepoStateSnapshot(payload: RepoStateResponse["data"]): RepoStateSnapshot {
+  return {
+    branch: payload.branch,
+    headCommit: payload.head_commit,
+    dirty: payload.dirty,
+    changedFiles: payload.changed_files,
+    capturedAt: payload.captured_at,
   };
 }
 
@@ -256,6 +277,34 @@ export async function resetPracticeSession(sessionId: number): Promise<void> {
         : "Request failed";
     throw new ApiError(message, response.status);
   }
+}
+
+export async function fetchPracticeRepoState(
+  sessionId: number,
+  signal?: AbortSignal,
+): Promise<RepoStateSnapshot> {
+  const response = await fetch(`${API_BASE}/practice-sessions/${sessionId}/repo-state`, {
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+    signal,
+  });
+
+  const payload = await readJson<RepoStateResponse | { error?: string }>(response);
+  if (!response.ok) {
+    const message =
+      payload.data && "error" in payload.data && payload.data.error
+        ? payload.data.error
+        : "Unable to load repository state.";
+    throw new ApiError(message, response.status);
+  }
+
+  if (!payload.data || !("data" in payload.data)) {
+    throw new ApiError("Repository state response was malformed", response.status);
+  }
+
+  return toRepoStateSnapshot(payload.data.data);
 }
 
 export async function logout(): Promise<void> {

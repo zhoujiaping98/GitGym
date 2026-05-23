@@ -49,6 +49,20 @@ export type CommandHistoryEntry = {
   summary?: string;
 };
 
+export type RepoStateSnapshot = {
+  branch: string;
+  headCommit: string;
+  dirty: boolean;
+  changedFiles: string[];
+  capturedAt: string;
+};
+
+export type RepoStateView =
+  | { status: "idle"; snapshot: null; error: null }
+  | { status: "loading"; snapshot: null; error: null }
+  | { status: "ready"; snapshot: RepoStateSnapshot; error: null }
+  | { status: "error"; snapshot: null; error: string };
+
 export type TerminalSessionState = {
   status: "idle" | "connecting" | "ready" | "unavailable" | "error";
   transcript: string[];

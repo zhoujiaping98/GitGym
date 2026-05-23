@@ -139,6 +139,16 @@ const defaultCatalog: PracticeCatalog = {
   ],
 };
 
+const defaultRepoStatePayload = {
+  data: {
+    branch: "main",
+    head_commit: "6f9bc9e2f9e3f4f24b88a1d8d76d8ef0f1b1c6a0",
+    dirty: false,
+    changed_files: [],
+    captured_at: "2026-05-23T04:00:00.000Z",
+  },
+} as const;
+
 function createCatalogResponse(
   catalog: {
     templates: Array<{ id: number; key: string; name: string }>;
@@ -164,6 +174,19 @@ function createCatalogResponse(
       headers: { "Content-Type": "application/json" },
     }),
   );
+}
+
+function createJsonResponse(payload: unknown, status = 200) {
+  return Promise.resolve(
+    new Response(JSON.stringify(payload), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
+
+function createErrorResponse(status: number, message: string) {
+  return createJsonResponse({ error: message }, status);
 }
 
 function createTerminalState(
@@ -266,11 +289,17 @@ beforeEach(() => {
   vi.stubGlobal("fetch", mockFetch);
   mockFetch.mockReset();
   mockFetch.mockImplementation((input: RequestInfo | URL) => {
-    if (String(input).endsWith("/api/v1/templates")) {
+    const url = String(input);
+
+    if (url.endsWith("/api/v1/templates")) {
       return createCatalogResponse();
     }
 
-    throw new Error(`Unexpected fetch request: ${String(input)}`);
+    if (/\/api\/v1\/practice-sessions\/\d+\/repo-state$/.test(url)) {
+      return createJsonResponse(defaultRepoStatePayload);
+    }
+
+    throw new Error(`Unexpected fetch request: ${url}`);
   });
 
   mockUseCurrentSession.mockReturnValue({
@@ -424,6 +453,88 @@ describe("App", () => {
     expect(within(sessionCard).getByText("/tmp/gitgym/session-42")).toBeInTheDocument();
     expect(within(sessionCard).getByText("Session ID")).toBeInTheDocument();
     expect(within(sessionCard).getByText("42")).toBeInTheDocument();
+  });
+
+  it("renders live repo snapshot facts for the active session", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse(defaultRepoStatePayload);
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    const sessionCard = await screen.findByLabelText("Operational session card");
+
+    expect(await within(sessionCard).findByText("Branch")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("main")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("HEAD")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("6f9bc9e")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("Working tree")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("Clean")).toBeInTheDocument();
+  });
+
+  it("renders an inline unavailable repo state when the snapshot cannot be loaded", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createErrorResponse(502, "Unable to load repository state.");
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    const sessionCard = await screen.findByLabelText("Operational session card");
+
+    expect(
+      await within(sessionCard).findByText("Repository state unavailable."),
+    ).toBeInTheDocument();
+    expect(within(sessionCard).queryByText("Branch")).not.toBeInTheDocument();
   });
 
   it("keeps the workbench visible and marks the card recovering when the terminal degrades", async () => {

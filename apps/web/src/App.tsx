@@ -4,6 +4,7 @@ import { ScenarioPickerModal } from "./components/ScenarioPickerModal";
 import { TopBar } from "./components/TopBar";
 import { Workbench } from "./components/Workbench";
 import { useCurrentSession } from "./hooks/useCurrentSession";
+import { useRepoState } from "./hooks/useRepoState";
 import { useTerminalSession } from "./hooks/useTerminalSession";
 import {
   createPracticeSession,
@@ -172,6 +173,7 @@ export default function App() {
     displayedSession && catalog
       ? catalog.templates.find((entry) => entry.id === displayedSession.templateId) ?? null
       : null;
+  const repoState = useRepoState(displayedSession);
 
   useEffect(() => {
     if (
@@ -588,6 +590,7 @@ export default function App() {
             terminal={terminalSession}
             scenarioName={displayedScenario?.name ?? null}
             templateName={displayedTemplate?.name ?? null}
+            repoState={repoState}
           />
         </main>
       ) : currentSession.status === "loading" ? (

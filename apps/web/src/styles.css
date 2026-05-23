@@ -434,7 +434,8 @@ a {
 
 .repo-state-card,
 .repo-state-facts,
-.repo-state-lifecycle {
+.repo-state-lifecycle,
+.repo-state-snapshot {
   display: grid;
 }
 
@@ -530,14 +531,42 @@ a {
   border-top: 1px solid rgba(240, 246, 255, 0.08);
 }
 
+.repo-state-snapshot-shell {
+  display: grid;
+  gap: 0.75rem;
+  padding-top: 0.2rem;
+  border-top: 1px solid rgba(240, 246, 255, 0.08);
+}
+
+.repo-state-snapshot-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  color: rgba(240, 246, 255, 0.94);
+  font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
+  font-size: 0.8rem;
+}
+
+.repo-state-snapshot {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border-radius: 0.95rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
 .repo-state-facts div,
-.repo-state-lifecycle div {
+.repo-state-lifecycle div,
+.repo-state-snapshot div {
   display: grid;
   gap: 0.2rem;
 }
 
 .repo-state-facts dt,
-.repo-state-lifecycle dt {
+.repo-state-lifecycle dt,
+.repo-state-snapshot dt {
   color: rgba(240, 246, 255, 0.56);
   font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
   font-size: 0.72rem;
@@ -546,11 +575,33 @@ a {
 }
 
 .repo-state-facts dd,
-.repo-state-lifecycle dd {
+.repo-state-lifecycle dd,
+.repo-state-snapshot dd {
   margin: 0;
   color: rgba(240, 246, 255, 0.94);
   font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
   font-size: 0.84rem;
+}
+
+.repo-state-inline-note {
+  color: rgba(240, 246, 255, 0.66);
+  font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.repo-state-changes {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0 0 0 1.1rem;
+  color: rgba(240, 246, 255, 0.82);
+  font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
+  font-size: 0.78rem;
+}
+
+.repo-state-changes li {
+  overflow-wrap: anywhere;
 }
 
 .repo-state-break {
@@ -777,6 +828,10 @@ a {
   }
 
   .repo-state-lifecycle {
+    grid-template-columns: 1fr;
+  }
+
+  .repo-state-snapshot {
     grid-template-columns: 1fr;
   }
 }
