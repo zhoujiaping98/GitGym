@@ -1122,6 +1122,7 @@ func (s *stubPracticeSessionStore) ExpirePracticeSessions(_ context.Context, bef
 type stubRunnerClient struct {
 	createWorkspaceCalls  int
 	lastTemplate          string
+	repoState             runner.RepoState
 	resetWorkspaceCalls   int
 	lastResetWorkspaceID  string
 	deleteWorkspaceCalls  int
@@ -1132,6 +1133,7 @@ type stubRunnerClient struct {
 	connectTerminalFunc   func(context.Context, string) (runner.TerminalConnection, error)
 	deleteWorkspaceFunc   func(context.Context, int, string, string, time.Duration) error
 	err                   error
+	repoStateErr          error
 	resetErr              error
 	connectErr            error
 	deleteErr             error
@@ -1144,6 +1146,13 @@ func (s *stubRunnerClient) CreateWorkspace(_ context.Context, template string) (
 		return runner.Workspace{}, s.err
 	}
 	return s.workspace, nil
+}
+
+func (s *stubRunnerClient) GetRepoState(_ context.Context, workspaceID string) (runner.RepoState, error) {
+	if s.repoStateErr != nil {
+		return runner.RepoState{}, s.repoStateErr
+	}
+	return s.repoState, nil
 }
 
 func (s *stubRunnerClient) ResetWorkspace(_ context.Context, workspaceID string) error {
