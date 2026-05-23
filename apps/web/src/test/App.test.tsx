@@ -1610,6 +1610,85 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not show retry sync for informational reset reconciliation results", async () => {
+    const refresh = vi.fn().mockResolvedValue(null);
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh,
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => {
+      expect(mockResetPracticeSession).toHaveBeenCalledWith(42);
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    expect(
+      screen.getByText("Reset completed, but the server did not return a current session."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry sync" })).not.toBeInTheDocument();
+  });
+
+  it("clears the inline reconciliation message when retry sync succeeds", async () => {
+    const refresh = vi
+      .fn()
+      .mockResolvedValueOnce(mismatchedSession)
+      .mockResolvedValueOnce(nextSession);
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh,
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    render(<App />);
+
+    await waitForNewSessionAction();
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+    await confirmScenarioPicker();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Created session #43, but the server returned session #99."),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Retry sync" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry sync" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("runner-43")).toBeInTheDocument();
+    });
+
+    expect(
+      screen.queryByText("Created session #43, but the server returned session #99."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry sync" })).not.toBeInTheDocument();
+  });
+
   it("creates an xterm session and streams output into it", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
