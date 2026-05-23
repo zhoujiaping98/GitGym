@@ -31,6 +31,7 @@ var (
 	ErrPracticeServiceConfiguration = errors.New("practice service configuration error")
 	ErrRunnerWorkspaceCreation      = errors.New("runner workspace creation failed")
 	ErrRunnerWorkspaceReset         = errors.New("runner workspace reset failed")
+	ErrRunnerRepoStateUnavailable   = errors.New("runner repository state unavailable")
 	ErrRunnerTerminalUnavailable    = errors.New("runner terminal unavailable")
 	ErrPracticeSessionNotFound      = errors.New("practice session not found")
 	ErrPracticeSessionExpired       = errors.New("practice session expired")
@@ -73,6 +74,7 @@ type PracticeService interface {
 	ResetPracticeSession(ctx context.Context, userID uint64, sessionID uint64) error
 	CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error)
 	PracticeSessionByID(ctx context.Context, userID uint64, sessionID uint64) (domain.PracticeSession, error)
+	PracticeSessionRepoState(ctx context.Context, userID uint64, sessionID uint64) (runner.RepoState, error)
 	ConnectTerminal(ctx context.Context, userID uint64, sessionID uint64) (runner.TerminalConnection, error)
 	ExpireStalePracticeSessions(ctx context.Context) (int, error)
 }
@@ -264,12 +266,7 @@ func (s *practiceService) ResetPracticeSession(ctx context.Context, userID uint6
 
 	if err := s.runner.ResetWorkspace(ctx, session.RunnerRef); err != nil {
 		if errors.Is(err, runner.ErrWorkspaceNotFound) {
-			updated, transitionErr := s.transitionSession(ctx, session, PracticeSessionStatusOrphaned)
-			if transitionErr != nil {
-				return transitionErr
-			}
-			_ = s.scheduleWorkspaceCleanup(ctx, updated, PracticeSessionStatusOrphaned, practiceSessionOrphanCleanupGrace)
-			return fmt.Errorf("%w", ErrPracticeSessionOrphaned)
+			return s.orphanSession(ctx, session)
 		}
 		if errors.Is(err, runner.ErrClientNotConfigured) {
 			return fmt.Errorf("%w: %v", ErrPracticeServiceConfiguration, err)
@@ -298,6 +295,30 @@ func (s *practiceService) PracticeSessionByID(ctx context.Context, userID uint64
 	return s.ensureSessionAvailable(ctx, session)
 }
 
+func (s *practiceService) PracticeSessionRepoState(ctx context.Context, userID uint64, sessionID uint64) (runner.RepoState, error) {
+	if s.runner == nil {
+		return runner.RepoState{}, fmt.Errorf("%w: runner client is not configured", ErrPracticeServiceConfiguration)
+	}
+
+	session, err := s.PracticeSessionByID(ctx, userID, sessionID)
+	if err != nil {
+		return runner.RepoState{}, err
+	}
+
+	repoState, err := s.runner.GetRepoState(ctx, session.RunnerRef)
+	if err != nil {
+		if errors.Is(err, runner.ErrWorkspaceNotFound) {
+			return runner.RepoState{}, s.orphanSession(ctx, session)
+		}
+		if errors.Is(err, runner.ErrClientNotConfigured) {
+			return runner.RepoState{}, fmt.Errorf("%w: %v", ErrPracticeServiceConfiguration, err)
+		}
+		return runner.RepoState{}, fmt.Errorf("%w: %v", ErrRunnerRepoStateUnavailable, err)
+	}
+
+	return repoState, nil
+}
+
 func (s *practiceService) ConnectTerminal(ctx context.Context, userID uint64, sessionID uint64) (runner.TerminalConnection, error) {
 	if s.runner == nil {
 		return nil, fmt.Errorf("%w: runner client is not configured", ErrPracticeServiceConfiguration)
@@ -311,12 +332,7 @@ func (s *practiceService) ConnectTerminal(ctx context.Context, userID uint64, se
 	conn, err := s.runner.ConnectTerminal(ctx, session.RunnerRef)
 	if err != nil {
 		if errors.Is(err, runner.ErrWorkspaceNotFound) {
-			updated, transitionErr := s.transitionSession(ctx, session, PracticeSessionStatusOrphaned)
-			if transitionErr != nil {
-				return nil, transitionErr
-			}
-			_ = s.scheduleWorkspaceCleanup(ctx, updated, PracticeSessionStatusOrphaned, practiceSessionOrphanCleanupGrace)
-			return nil, fmt.Errorf("%w", ErrPracticeSessionOrphaned)
+			return nil, s.orphanSession(ctx, session)
 		}
 		if errors.Is(err, runner.ErrClientNotConfigured) {
 			return nil, fmt.Errorf("%w: %v", ErrPracticeServiceConfiguration, err)
@@ -387,6 +403,15 @@ func (s *practiceService) transitionSession(ctx context.Context, session domain.
 	}
 
 	return updated, nil
+}
+
+func (s *practiceService) orphanSession(ctx context.Context, session domain.PracticeSession) error {
+	updated, err := s.transitionSession(ctx, session, PracticeSessionStatusOrphaned)
+	if err != nil {
+		return err
+	}
+	_ = s.scheduleWorkspaceCleanup(ctx, updated, PracticeSessionStatusOrphaned, practiceSessionOrphanCleanupGrace)
+	return fmt.Errorf("%w", ErrPracticeSessionOrphaned)
 }
 
 func (s *practiceService) scheduleWorkspaceCleanup(ctx context.Context, session domain.PracticeSession, reason string, deleteAfter time.Duration) error {

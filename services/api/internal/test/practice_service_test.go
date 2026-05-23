@@ -599,6 +599,98 @@ func TestPracticeServiceMarksMissingRunnerWorkspaceOnTerminalConnect(t *testing.
 	}
 }
 
+func TestPracticeServiceReturnsRepoStateForSession(t *testing.T) {
+	t.Parallel()
+
+	store := &stubPracticeSessionStore{}
+	runnerClient := &stubRunnerClient{
+		workspace: runner.Workspace{
+			ID:       "ws-repo-state",
+			Path:     "/tmp/ws-repo-state",
+			Template: "standard",
+		},
+		repoState: runner.RepoState{
+			BranchName:    "main",
+			HeadCommit:    "abc123",
+			StatusSummary: []string{"M notes.txt"},
+			CapturedAt:    time.Date(2026, 5, 23, 4, 0, 0, 0, time.UTC),
+		},
+	}
+	svc := service.NewPracticeService(store, runnerClient, time.Now)
+
+	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 1,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	repoState, err := svc.PracticeSessionRepoState(context.Background(), 42, created.ID)
+	if err != nil {
+		t.Fatalf("expected repo state, got %v", err)
+	}
+	if repoState.BranchName != "main" {
+		t.Fatalf("expected branch main, got %q", repoState.BranchName)
+	}
+	if runnerClient.repoStateCalls != 1 {
+		t.Fatalf("expected one repo state lookup, got %d", runnerClient.repoStateCalls)
+	}
+	if runnerClient.lastRepoStateWorkspaceID != created.RunnerRef {
+		t.Fatalf("expected repo state lookup for %q, got %q", created.RunnerRef, runnerClient.lastRepoStateWorkspaceID)
+	}
+}
+
+func TestPracticeServiceMarksMissingRunnerWorkspaceOnRepoStateLookup(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 23, 4, 30, 0, 0, time.UTC)
+	store := &stubPracticeSessionStore{}
+	runnerClient := &stubRunnerClient{
+		workspace: runner.Workspace{
+			ID:       "ws-repo-missing",
+			Path:     "/tmp/ws-repo-missing",
+			Template: "standard",
+		},
+		repoStateErr: runner.ErrWorkspaceNotFound,
+	}
+	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
+
+	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 1,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	_, err = svc.PracticeSessionRepoState(context.Background(), 42, created.ID)
+
+	if !errors.Is(err, service.ErrPracticeSessionOrphaned) {
+		t.Fatalf("expected orphaned session error, got %v", err)
+	}
+	if runnerClient.lastRepoStateWorkspaceID != created.RunnerRef {
+		t.Fatalf("expected repo state lookup for %q, got %q", created.RunnerRef, runnerClient.lastRepoStateWorkspaceID)
+	}
+	if store.updateCalls != 1 {
+		t.Fatalf("expected one lifecycle update, got %d", store.updateCalls)
+	}
+	if store.lastUpdatedSession.Status != service.PracticeSessionStatusOrphaned {
+		t.Fatalf("expected orphaned status, got %q", store.lastUpdatedSession.Status)
+	}
+	if runnerClient.deleteWorkspaceCalls != 1 {
+		t.Fatalf("expected one delayed cleanup request, got %d", runnerClient.deleteWorkspaceCalls)
+	}
+	if runnerClient.lastDeleteWorkspaceID != created.RunnerRef {
+		t.Fatalf("expected orphaned cleanup for %q, got %q", created.RunnerRef, runnerClient.lastDeleteWorkspaceID)
+	}
+	if runnerClient.lastDeleteReason != service.PracticeSessionStatusOrphaned {
+		t.Fatalf("expected orphaned cleanup reason, got %q", runnerClient.lastDeleteReason)
+	}
+}
+
 func TestPracticeServiceSchedulesOrphanCleanupWithDetachedContext(t *testing.T) {
 	t.Parallel()
 
@@ -1120,23 +1212,25 @@ func (s *stubPracticeSessionStore) ExpirePracticeSessions(_ context.Context, bef
 }
 
 type stubRunnerClient struct {
-	createWorkspaceCalls  int
-	lastTemplate          string
-	repoState             runner.RepoState
-	resetWorkspaceCalls   int
-	lastResetWorkspaceID  string
-	deleteWorkspaceCalls  int
-	lastDeleteWorkspaceID string
-	lastDeleteReason      string
-	lastDeleteDelay       time.Duration
-	workspace             runner.Workspace
-	connectTerminalFunc   func(context.Context, string) (runner.TerminalConnection, error)
-	deleteWorkspaceFunc   func(context.Context, int, string, string, time.Duration) error
-	err                   error
-	repoStateErr          error
-	resetErr              error
-	connectErr            error
-	deleteErr             error
+	createWorkspaceCalls     int
+	lastTemplate             string
+	repoStateCalls           int
+	lastRepoStateWorkspaceID string
+	repoState                runner.RepoState
+	resetWorkspaceCalls      int
+	lastResetWorkspaceID     string
+	deleteWorkspaceCalls     int
+	lastDeleteWorkspaceID    string
+	lastDeleteReason         string
+	lastDeleteDelay          time.Duration
+	workspace                runner.Workspace
+	connectTerminalFunc      func(context.Context, string) (runner.TerminalConnection, error)
+	deleteWorkspaceFunc      func(context.Context, int, string, string, time.Duration) error
+	err                      error
+	repoStateErr             error
+	resetErr                 error
+	connectErr               error
+	deleteErr                error
 }
 
 func (s *stubRunnerClient) CreateWorkspace(_ context.Context, template string) (runner.Workspace, error) {
@@ -1149,6 +1243,8 @@ func (s *stubRunnerClient) CreateWorkspace(_ context.Context, template string) (
 }
 
 func (s *stubRunnerClient) GetRepoState(_ context.Context, workspaceID string) (runner.RepoState, error) {
+	s.repoStateCalls++
+	s.lastRepoStateWorkspaceID = workspaceID
 	if s.repoStateErr != nil {
 		return runner.RepoState{}, s.repoStateErr
 	}

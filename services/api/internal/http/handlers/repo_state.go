@@ -6,12 +6,11 @@ import (
 	"strconv"
 
 	"gitgym/services/api/internal/http/middleware"
-	"gitgym/services/api/internal/runner"
 	"gitgym/services/api/internal/service"
 	"github.com/go-chi/chi/v5"
 )
 
-func GetPracticeSessionRepoState(practiceService service.PracticeService, runnerClient runner.Client) http.HandlerFunc {
+func GetPracticeSessionRepoState(practiceService service.PracticeService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authenticatedSession, ok := middleware.AuthenticatedSessionFromContext(r.Context())
 		if !ok || authenticatedSession.UserID == 0 {
@@ -29,30 +28,17 @@ func GetPracticeSessionRepoState(practiceService service.PracticeService, runner
 			return
 		}
 
-		session, err := practiceService.PracticeSessionByID(r.Context(), authenticatedSession.UserID, sessionID)
+		repoState, err := practiceService.PracticeSessionRepoState(r.Context(), authenticatedSession.UserID, sessionID)
 		if err != nil {
+			if errors.Is(err, service.ErrRunnerRepoStateUnavailable) {
+				writeJSON(w, http.StatusBadGateway, map[string]any{
+					"error": err.Error(),
+				})
+				return
+			}
 			writeJSON(w, statusForPracticeSessionLookupError(err), map[string]any{
 				"error": err.Error(),
 			})
-			return
-		}
-
-		repoState, err := runnerClient.GetRepoState(r.Context(), session.RunnerRef)
-		if err != nil {
-			switch {
-			case errors.Is(err, runner.ErrWorkspaceNotFound):
-				writeJSON(w, http.StatusGone, map[string]any{
-					"error": "current session workspace is unavailable",
-				})
-			case errors.Is(err, runner.ErrClientNotConfigured):
-				writeJSON(w, http.StatusInternalServerError, map[string]any{
-					"error": err.Error(),
-				})
-			default:
-				writeJSON(w, http.StatusBadGateway, map[string]any{
-					"error": "unable to load repository state",
-				})
-			}
 			return
 		}
 

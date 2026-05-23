@@ -175,29 +175,37 @@ func TestPracticeSessionRepoStateReturnsSnapshot(t *testing.T) {
 	t.Parallel()
 
 	capturedAt := time.Date(2026, 5, 23, 4, 0, 0, 0, time.UTC)
+	store := service.NewInMemoryPracticeSessionStore()
+	runnerClient := &stubRunnerClient{
+		workspace: runner.Workspace{
+			ID:       "ws-repo",
+			Path:     "/tmp/ws-repo",
+			Template: "standard",
+		},
+		repoState: runner.RepoState{
+			BranchName:    "feature/repo-panel",
+			HeadCommit:    "6f9bc9e2f9e3f4f24b88a1d8d76d8ef0f1b1c6a0",
+			StatusSummary: []string{"M notes.txt", "?? scratch.md"},
+			CapturedAt:    capturedAt,
+		},
+	}
+	practiceService := service.NewPracticeService(store, runnerClient, func() time.Time { return capturedAt })
+	created, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 1,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
 	router := httpx.NewRouter(httpx.Dependencies{
-		PracticeService: &stubPracticeService{
-			practiceSessionByIDFunc: func(context.Context, uint64, uint64) (domain.PracticeSession, error) {
-				return domain.PracticeSession{
-					ID:        123,
-					UserID:    42,
-					RunnerRef: "ws-repo",
-					Status:    service.PracticeSessionStatusActive,
-				}, nil
-			},
-		},
-		RunnerClient: &stubRunnerClient{
-			repoState: runner.RepoState{
-				BranchName:    "feature/repo-panel",
-				HeadCommit:    "6f9bc9e2f9e3f4f24b88a1d8d76d8ef0f1b1c6a0",
-				StatusSummary: []string{"M notes.txt", "?? scratch.md"},
-				CapturedAt:    capturedAt,
-			},
-		},
-		AuthStore: authStoreWithSession("repo-state-token", 42),
+		PracticeService: practiceService,
+		RunnerClient:    runnerClient,
+		AuthStore:       authStoreWithSession("repo-state-token", 42),
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/123/repo-state", nil)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/practice-sessions/%d/repo-state", created.ID), nil)
 	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "repo-state-token"})
 	rec := httptest.NewRecorder()
 
@@ -234,27 +242,44 @@ func TestPracticeSessionRepoStateReturnsSnapshot(t *testing.T) {
 	if payload.Data.CapturedAt != capturedAt.Format(time.RFC3339) {
 		t.Fatalf("expected captured_at %q, got %q", capturedAt.Format(time.RFC3339), payload.Data.CapturedAt)
 	}
+	if runnerClient.repoStateCalls != 1 {
+		t.Fatalf("expected one repo state lookup, got %d", runnerClient.repoStateCalls)
+	}
+	if runnerClient.lastRepoStateWorkspaceID != created.RunnerRef {
+		t.Fatalf("expected repo state lookup for %q, got %q", created.RunnerRef, runnerClient.lastRepoStateWorkspaceID)
+	}
 }
 
 func TestPracticeSessionRepoStateMapsMissingWorkspaceToGone(t *testing.T) {
 	t.Parallel()
 
-	router := httpx.NewRouter(httpx.Dependencies{
-		PracticeService: &stubPracticeService{
-			practiceSessionByIDFunc: func(context.Context, uint64, uint64) (domain.PracticeSession, error) {
-				return domain.PracticeSession{
-					ID:        123,
-					UserID:    42,
-					RunnerRef: "ws-missing",
-					Status:    service.PracticeSessionStatusActive,
-				}, nil
-			},
+	now := time.Date(2026, 5, 23, 5, 0, 0, 0, time.UTC)
+	store := service.NewInMemoryPracticeSessionStore()
+	runnerClient := &stubRunnerClient{
+		workspace: runner.Workspace{
+			ID:       "ws-missing",
+			Path:     "/tmp/ws-missing",
+			Template: "standard",
 		},
-		RunnerClient: &stubRunnerClient{repoStateErr: runner.ErrWorkspaceNotFound},
-		AuthStore:    authStoreWithSession("repo-gone-token", 42),
+		repoStateErr: runner.ErrWorkspaceNotFound,
+	}
+	practiceService := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
+	created, err := practiceService.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 1,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	router := httpx.NewRouter(httpx.Dependencies{
+		PracticeService: practiceService,
+		RunnerClient:    runnerClient,
+		AuthStore:       authStoreWithSession("repo-gone-token", 42),
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/123/repo-state", nil)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/practice-sessions/%d/repo-state", created.ID), nil)
 	req.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "repo-gone-token"})
 	rec := httptest.NewRecorder()
 
@@ -262,6 +287,18 @@ func TestPracticeSessionRepoStateMapsMissingWorkspaceToGone(t *testing.T) {
 
 	if rec.Code != http.StatusGone {
 		t.Fatalf("expected 410, got %d with body %s", rec.Code, rec.Body.String())
+	}
+	if runnerClient.lastRepoStateWorkspaceID != created.RunnerRef {
+		t.Fatalf("expected repo state lookup for %q, got %q", created.RunnerRef, runnerClient.lastRepoStateWorkspaceID)
+	}
+	currentReq := httptest.NewRequest(http.MethodGet, "/api/v1/practice-sessions/current", nil)
+	currentReq.AddCookie(&http.Cookie{Name: "gitgym_session", Value: "repo-gone-token"})
+	currentRec := httptest.NewRecorder()
+
+	router.ServeHTTP(currentRec, currentReq)
+
+	if currentRec.Code != http.StatusGone {
+		t.Fatalf("expected current session to remain gone after orphan transition, got %d with body %s", currentRec.Code, currentRec.Body.String())
 	}
 }
 
@@ -859,19 +896,20 @@ func TestResetPracticeSessionMapsErrors(t *testing.T) {
 }
 
 type stubPracticeService struct {
-	createPracticeSessionFunc  func(context.Context, service.CreatePracticeSessionInput) (domain.PracticeSession, error)
-	resetPracticeSessionFunc   func(context.Context, uint64, uint64) error
-	currentPracticeSessionFunc func(context.Context, uint64) (domain.PracticeSession, error)
-	practiceSessionByIDFunc    func(context.Context, uint64, uint64) (domain.PracticeSession, error)
-	connectTerminalFunc        func(context.Context, uint64, uint64) (runner.TerminalConnection, error)
-	expireStaleSessionsFunc    func(context.Context) (int, error)
-	listTemplatesResult        []service.PracticeTemplate
-	listScenariosResult        []service.PracticeScenario
-	listTemplatesErr           error
-	listScenariosErr           error
-	lastCreateInput            service.CreatePracticeSessionInput
-	lastResetUserID            uint64
-	lastResetSessionID         uint64
+	createPracticeSessionFunc    func(context.Context, service.CreatePracticeSessionInput) (domain.PracticeSession, error)
+	resetPracticeSessionFunc     func(context.Context, uint64, uint64) error
+	currentPracticeSessionFunc   func(context.Context, uint64) (domain.PracticeSession, error)
+	practiceSessionByIDFunc      func(context.Context, uint64, uint64) (domain.PracticeSession, error)
+	practiceSessionRepoStateFunc func(context.Context, uint64, uint64) (runner.RepoState, error)
+	connectTerminalFunc          func(context.Context, uint64, uint64) (runner.TerminalConnection, error)
+	expireStaleSessionsFunc      func(context.Context) (int, error)
+	listTemplatesResult          []service.PracticeTemplate
+	listScenariosResult          []service.PracticeScenario
+	listTemplatesErr             error
+	listScenariosErr             error
+	lastCreateInput              service.CreatePracticeSessionInput
+	lastResetUserID              uint64
+	lastResetSessionID           uint64
 }
 
 func (s *stubPracticeService) ListTemplates(context.Context) []service.PracticeTemplate {
@@ -941,6 +979,13 @@ func (s *stubPracticeService) PracticeSessionByID(ctx context.Context, userID ui
 		return s.practiceSessionByIDFunc(ctx, userID, sessionID)
 	}
 	return domain.PracticeSession{}, service.ErrPracticeSessionNotFound
+}
+
+func (s *stubPracticeService) PracticeSessionRepoState(ctx context.Context, userID uint64, sessionID uint64) (runner.RepoState, error) {
+	if s.practiceSessionRepoStateFunc != nil {
+		return s.practiceSessionRepoStateFunc(ctx, userID, sessionID)
+	}
+	return runner.RepoState{}, service.ErrPracticeSessionNotFound
 }
 
 func (s *stubPracticeService) ConnectTerminal(ctx context.Context, userID uint64, sessionID uint64) (runner.TerminalConnection, error) {
