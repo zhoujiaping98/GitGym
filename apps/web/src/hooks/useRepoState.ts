@@ -25,19 +25,20 @@ export function useRepoState({
   const [refreshToken, setRefreshToken] = useState(0);
   const lastCompletedCommandKeyRef = useRef<string | null>(null);
   const lastSessionIdRef = useRef<number | null>(null);
-  const previousHistoryLengthRef = useRef(0);
-  const latestCompletedCommandId = useMemo(
-    () =>
-      [...commandHistory].reverse().find((entry) => entry.phase === "stopped")?.id ?? null,
+  const previousCompletedCountRef = useRef(0);
+  const completedCommands = useMemo(
+    () => commandHistory.filter((entry) => entry.phase === "stopped"),
     [commandHistory],
   );
+  const latestCompletedCommandId = completedCommands.at(-1)?.id ?? null;
+  const completedCommandCount = completedCommands.length;
   const latestCompletedCommandKey =
-    latestCompletedCommandId === null ? null : `${commandHistory.length}:${latestCompletedCommandId}`;
+    latestCompletedCommandId === null ? null : `${completedCommandCount}:${latestCompletedCommandId}`;
 
   useEffect(() => {
     if (!session) {
       lastCompletedCommandKeyRef.current = null;
-      previousHistoryLengthRef.current = 0;
+      previousCompletedCountRef.current = 0;
       setState(idleState);
       return;
     }
@@ -98,7 +99,7 @@ export function useRepoState({
     }
 
     lastCompletedCommandKeyRef.current = latestCompletedCommandKey;
-    previousHistoryLengthRef.current = commandHistory.length;
+    previousCompletedCountRef.current = completedCommandCount;
   }, [session?.id]);
 
   useEffect(() => {
@@ -106,10 +107,10 @@ export function useRepoState({
       return;
     }
 
-    if (commandHistory.length < previousHistoryLengthRef.current || commandHistory.length === 0) {
+    if (completedCommandCount < previousCompletedCountRef.current || commandHistory.length === 0) {
       lastCompletedCommandKeyRef.current = null;
     }
-    previousHistoryLengthRef.current = commandHistory.length;
+    previousCompletedCountRef.current = completedCommandCount;
 
     if (!latestCompletedCommandKey) {
       return;
@@ -121,7 +122,7 @@ export function useRepoState({
 
     lastCompletedCommandKeyRef.current = latestCompletedCommandKey;
     setRefreshToken((value) => value + 1);
-  }, [commandHistory.length, latestCompletedCommandKey, session]);
+  }, [commandHistory.length, completedCommandCount, latestCompletedCommandKey, session]);
 
   return state;
 }
