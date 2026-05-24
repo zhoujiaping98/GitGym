@@ -2606,6 +2606,7 @@ describe("App", () => {
       expect(screen.getByText("runner-43")).toBeInTheDocument();
     });
 
+    expect(screen.getByText("Snapshot refreshed after sync")).toBeInTheDocument();
     expect(
       screen.queryByText("Created session #43, but the server returned session #99."),
     ).not.toBeInTheDocument();

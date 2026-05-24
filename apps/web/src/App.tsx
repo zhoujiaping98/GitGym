@@ -475,6 +475,9 @@ export default function App() {
         return;
       }
 
+      if (displayedSession?.id !== refreshedSession.id) {
+        pendingLifecycleRepoRefreshRef.current = "session_sync";
+      }
       setSessionOverride(refreshedSession);
       setActionError(null);
       setRepoRefreshContext({ trigger: "session_sync" });
