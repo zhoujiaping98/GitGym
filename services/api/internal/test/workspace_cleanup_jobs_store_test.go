@@ -120,6 +120,61 @@ func TestWorkspaceCleanupJobStoreClaimsDueJobsAndMarksSuccess(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCleanupJobStoreMarksFailureAndReschedules(t *testing.T) {
+	t.Parallel()
+
+	store := newTestMySQLStore(t)
+	sessionID := seedPracticeSession(t, store, seedPracticeSessionParams{
+		userID:     11,
+		scenarioID: 1,
+		templateID: 1,
+		runnerRef:  "ws-cleanup-failed",
+		workspace:  "/tmp/ws-cleanup-failed",
+		status:     "expired",
+	})
+
+	now := time.Date(2026, 5, 24, 14, 0, 0, 0, time.UTC)
+	rescheduledAt := now.Add(15 * time.Minute)
+	if err := store.UpsertWorkspaceCleanupJob(context.Background(), domain.WorkspaceCleanupJob{
+		PracticeSessionID: sessionID,
+		WorkspaceID:       "ws-cleanup-failed",
+		Reason:            "expired",
+		ScheduledAt:       now,
+		Status:            "pending",
+	}); err != nil {
+		t.Fatalf("seed cleanup job: %v", err)
+	}
+
+	seededJobs, err := store.ListWorkspaceCleanupJobsForSession(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("list seeded cleanup jobs: %v", err)
+	}
+	if len(seededJobs) != 1 {
+		t.Fatalf("expected one seeded cleanup job, got %d", len(seededJobs))
+	}
+
+	if err := store.MarkWorkspaceCleanupJobFailed(context.Background(), seededJobs[0].ID, rescheduledAt, "runner timeout"); err != nil {
+		t.Fatalf("mark cleanup failure: %v", err)
+	}
+
+	reloaded, err := store.ListWorkspaceCleanupJobsForSession(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("reload cleanup jobs: %v", err)
+	}
+	if len(reloaded) != 1 {
+		t.Fatalf("expected one cleanup job, got %d", len(reloaded))
+	}
+	if reloaded[0].Status != "failed" {
+		t.Fatalf("expected failed cleanup job, got %q", reloaded[0].Status)
+	}
+	if !reloaded[0].ScheduledAt.Equal(rescheduledAt) {
+		t.Fatalf("expected rescheduled_at %v, got %v", rescheduledAt, reloaded[0].ScheduledAt)
+	}
+	if reloaded[0].LastError != "runner timeout" {
+		t.Fatalf("expected last_error to round-trip, got %q", reloaded[0].LastError)
+	}
+}
+
 type seedPracticeSessionParams struct {
 	userID     uint64
 	scenarioID uint64

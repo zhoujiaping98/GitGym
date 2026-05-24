@@ -520,7 +520,7 @@ func (s *MySQLStore) MarkWorkspaceCleanupJobFailed(ctx context.Context, jobID ui
 UPDATE workspace_cleanup_jobs
 SET status = ?, scheduled_at = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP(6)
 WHERE id = ?
-`, "pending", scheduledAt, nullableString(lastErr), jobID); err != nil {
+`, "failed", scheduledAt, nullableString(lastErr), jobID); err != nil {
 		return fmt.Errorf("mark workspace cleanup job failed: %w", err)
 	}
 
