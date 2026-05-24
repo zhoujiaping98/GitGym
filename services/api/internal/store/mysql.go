@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"gitgym/services/api/internal/domain"
@@ -124,6 +125,52 @@ SELECT id, scenario_key, name, template_id
 FROM scenarios
 WHERE is_active = 1
 ORDER BY id ASC
+`
+	upsertWorkspaceCleanupJobQuery = `
+INSERT INTO workspace_cleanup_jobs (
+  practice_session_id, workspace_id, reason, scheduled_at, status, attempt_count, last_error
+) VALUES (?, ?, ?, ?, ?, 0, NULL)
+ON DUPLICATE KEY UPDATE
+  workspace_id = VALUES(workspace_id),
+  reason = VALUES(reason),
+  scheduled_at = VALUES(scheduled_at),
+  status = VALUES(status),
+  last_error = NULL,
+  updated_at = CURRENT_TIMESTAMP(6)
+`
+	claimDueWorkspaceCleanupJobsQuery = `
+SELECT
+  id,
+  practice_session_id,
+  workspace_id,
+  reason,
+  scheduled_at,
+  status,
+  attempt_count,
+  last_error,
+  created_at,
+  updated_at
+FROM workspace_cleanup_jobs
+WHERE status = ? AND scheduled_at <= ?
+ORDER BY scheduled_at ASC, id ASC
+LIMIT ?
+FOR UPDATE
+`
+	listWorkspaceCleanupJobsForSessionQuery = `
+SELECT
+  id,
+  practice_session_id,
+  workspace_id,
+  reason,
+  scheduled_at,
+  status,
+  attempt_count,
+  last_error,
+  created_at,
+  updated_at
+FROM workspace_cleanup_jobs
+WHERE practice_session_id = ?
+ORDER BY scheduled_at ASC, id ASC
 `
 )
 
@@ -369,6 +416,139 @@ func (s *MySQLStore) ListPracticeScenarios(ctx context.Context) ([]service.Pract
 	return scenarios, nil
 }
 
+func (s *MySQLStore) UpsertWorkspaceCleanupJob(ctx context.Context, job domain.WorkspaceCleanupJob) error {
+	if _, err := s.db.ExecContext(
+		ctx,
+		upsertWorkspaceCleanupJobQuery,
+		job.PracticeSessionID,
+		job.WorkspaceID,
+		job.Reason,
+		job.ScheduledAt,
+		job.Status,
+	); err != nil {
+		return fmt.Errorf("upsert workspace cleanup job: %w", err)
+	}
+
+	return nil
+}
+
+func (s *MySQLStore) ClaimDueWorkspaceCleanupJobs(ctx context.Context, now time.Time, limit int) ([]domain.WorkspaceCleanupJob, error) {
+	if limit <= 0 {
+		return []domain.WorkspaceCleanupJob{}, nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin claim workspace cleanup jobs tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	rows, err := tx.QueryContext(ctx, claimDueWorkspaceCleanupJobsQuery, "pending", now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query due workspace cleanup jobs: %w", err)
+	}
+
+	var jobs []domain.WorkspaceCleanupJob
+	for rows.Next() {
+		job, err := scanWorkspaceCleanupJobRows(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("iterate due workspace cleanup jobs: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close due workspace cleanup jobs rows: %w", err)
+	}
+
+	if len(jobs) == 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit empty workspace cleanup jobs claim: %w", err)
+		}
+		return []domain.WorkspaceCleanupJob{}, nil
+	}
+
+	args := make([]any, 0, len(jobs)+2)
+	args = append(args, "running")
+	placeholders := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		placeholders = append(placeholders, "?")
+		args = append(args, job.ID)
+	}
+	updateQuery := fmt.Sprintf(`
+UPDATE workspace_cleanup_jobs
+SET status = ?, attempt_count = attempt_count + 1, last_error = NULL, updated_at = CURRENT_TIMESTAMP(6)
+WHERE id IN (%s)
+`, strings.Join(placeholders, ", "))
+	if _, err := tx.ExecContext(ctx, updateQuery, args...); err != nil {
+		return nil, fmt.Errorf("mark workspace cleanup jobs running: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit workspace cleanup jobs claim: %w", err)
+	}
+
+	for i := range jobs {
+		jobs[i].Status = "running"
+		jobs[i].AttemptCount++
+		jobs[i].LastError = ""
+	}
+
+	return jobs, nil
+}
+
+func (s *MySQLStore) MarkWorkspaceCleanupJobSucceeded(ctx context.Context, jobID uint64) error {
+	if _, err := s.db.ExecContext(ctx, `
+UPDATE workspace_cleanup_jobs
+SET status = ?, last_error = NULL, updated_at = CURRENT_TIMESTAMP(6)
+WHERE id = ?
+`, "succeeded", jobID); err != nil {
+		return fmt.Errorf("mark workspace cleanup job succeeded: %w", err)
+	}
+
+	return nil
+}
+
+func (s *MySQLStore) MarkWorkspaceCleanupJobFailed(ctx context.Context, jobID uint64, scheduledAt time.Time, lastErr string) error {
+	if _, err := s.db.ExecContext(ctx, `
+UPDATE workspace_cleanup_jobs
+SET status = ?, scheduled_at = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP(6)
+WHERE id = ?
+`, "pending", scheduledAt, nullableString(lastErr), jobID); err != nil {
+		return fmt.Errorf("mark workspace cleanup job failed: %w", err)
+	}
+
+	return nil
+}
+
+func (s *MySQLStore) ListWorkspaceCleanupJobsForSession(ctx context.Context, sessionID uint64) ([]domain.WorkspaceCleanupJob, error) {
+	rows, err := s.db.QueryContext(ctx, listWorkspaceCleanupJobsForSessionQuery, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace cleanup jobs for session: %w", err)
+	}
+	defer rows.Close()
+
+	var jobs []domain.WorkspaceCleanupJob
+	for rows.Next() {
+		job, err := scanWorkspaceCleanupJobRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workspace cleanup jobs for session: %w", err)
+	}
+
+	return jobs, nil
+}
+
 func NormalizeMySQLDSN(dsn string) (string, error) {
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
@@ -495,4 +675,32 @@ func scanPracticeSessionScanner(scanner practiceSessionScanner) (domain.Practice
 
 	session.EndedAt = nullTimePtr(endedAt)
 	return session, nil
+}
+
+func scanWorkspaceCleanupJobRows(rows *sql.Rows) (domain.WorkspaceCleanupJob, error) {
+	var (
+		job       domain.WorkspaceCleanupJob
+		lastError sql.NullString
+	)
+
+	if err := rows.Scan(
+		&job.ID,
+		&job.PracticeSessionID,
+		&job.WorkspaceID,
+		&job.Reason,
+		&job.ScheduledAt,
+		&job.Status,
+		&job.AttemptCount,
+		&lastError,
+		&job.CreatedAt,
+		&job.UpdatedAt,
+	); err != nil {
+		return domain.WorkspaceCleanupJob{}, fmt.Errorf("scan workspace cleanup job rows: %w", err)
+	}
+
+	if lastError.Valid {
+		job.LastError = lastError.String
+	}
+
+	return job, nil
 }
