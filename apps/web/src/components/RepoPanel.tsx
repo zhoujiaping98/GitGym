@@ -77,6 +77,18 @@ function repoAttributionCopy(attribution: RepoAttribution | null) {
     return "Snapshot loaded";
   }
 
+  if (attribution.trigger === "session_create") {
+    return "Snapshot refreshed after new session";
+  }
+
+  if (attribution.trigger === "session_reset") {
+    return "Snapshot refreshed after reset";
+  }
+
+  if (attribution.trigger === "session_sync") {
+    return "Snapshot refreshed after sync";
+  }
+
   if (attribution.trigger === "command_complete" && attribution.commandText) {
     return `Updated after ${attribution.commandText}`;
   }

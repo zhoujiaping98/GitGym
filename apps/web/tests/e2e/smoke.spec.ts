@@ -563,17 +563,19 @@ test.describe("GitGym shell", () => {
     await page.goto("/");
 
     const sessionCard = page.getByLabel("Operational session card");
+    await expect(sessionCard).toContainText("Snapshot loaded");
     await expect(sessionCard).toContainText("Working tree");
     await expect(sessionCard).toContainText("Clean");
 
     await page.getByTestId("live-terminal").click();
-    await page.keyboard.type("echo dirty >> notes.txt");
+    await page.keyboard.type("git add notes.txt");
     repoStateDirty = true;
     await page.keyboard.press("Enter");
 
     await expect(page.getByLabel("Command history")).toContainText("Command finished");
     await expect(sessionCard).toContainText("Dirty");
     await expect(sessionCard).toContainText("notes.txt");
+    await expect(sessionCard).toContainText("Updated after git add notes.txt");
   });
 
   test("shows a retryable session error state when lookup fails", async ({

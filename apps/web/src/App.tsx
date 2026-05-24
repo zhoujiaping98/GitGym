@@ -429,6 +429,8 @@ export default function App() {
   }
 
   async function retrySessionRefresh() {
+    setRepoRefreshContext({ trigger: "session_sync" });
+
     try {
       const refreshedSession = await currentSession.refresh();
       if (!actionError?.retryExpectedSessionId) {
@@ -523,6 +525,7 @@ export default function App() {
     setPendingAction("new-session");
     void createPracticeSession({ scenarioId: selectedScenarioId })
       .then((nextSession) => {
+        setRepoRefreshContext({ trigger: "session_create" });
         setScenarioPickerState({ status: "closed" });
         if (!fallbackSession) {
           setSessionOverride(nextSession);
@@ -567,6 +570,7 @@ export default function App() {
 
             setActionError(null);
             setPendingAction("reset");
+            setRepoRefreshContext({ trigger: "session_reset" });
             void resetPracticeSession(session.id)
               .then(() => {
                 return reconcileSessionAction("reset", session.id, {

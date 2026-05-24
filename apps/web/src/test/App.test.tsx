@@ -623,6 +623,68 @@ describe("App", () => {
     expect(within(sessionCard).getByText("M notes.txt")).toBeInTheDocument();
   });
 
+  it("renders lifecycle attribution after reset refreshes the current session snapshot", async () => {
+    const refresh = vi.fn().mockResolvedValue(reconciledSession);
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh,
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        history: [],
+      }),
+    );
+
+    let repoStateRequestCount = 0;
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/reset") && init?.method === "POST") {
+        return createJsonResponse({ ok: true });
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        return createJsonResponse({
+          data: {
+            branch: repoStateRequestCount === 1 ? "main" : "reset/main",
+            head_commit:
+              repoStateRequestCount === 1
+                ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                : "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            dirty: repoStateRequestCount > 1,
+            changed_files: repoStateRequestCount > 1 ? ["M notes.txt"] : [],
+            captured_at: `2026-05-24T04:0${repoStateRequestCount}:00.000Z`,
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    await screen.findByText("Snapshot loaded");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Snapshot refreshed after reset")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("reset/main")).toBeInTheDocument();
+  });
+
   it("renders an inline unavailable repo state when the snapshot cannot be loaded", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
