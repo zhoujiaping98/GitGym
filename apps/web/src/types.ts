@@ -61,6 +61,7 @@ export type RepoStateView =
   | { status: "idle"; snapshot: null; error: null }
   | { status: "loading"; snapshot: null; error: null }
   | { status: "ready"; snapshot: RepoStateSnapshot; error: null }
+  | { status: "stale"; snapshot: RepoStateSnapshot; error: string | null }
   | { status: "error"; snapshot: null; error: string };
 
 export type TerminalSessionState = {

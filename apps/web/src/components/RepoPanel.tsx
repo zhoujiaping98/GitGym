@@ -145,8 +145,11 @@ export function RepoPanel({
               <span className="repo-state-inline-note">Repository state unavailable.</span>
             ) : null}
           </div>
-          {repoState.status === "ready" ? (
+          {repoState.status === "ready" || repoState.status === "stale" ? (
             <>
+              {repoState.status === "stale" && repoState.error ? (
+                <span className="repo-state-inline-note">Repository state may be out of date.</span>
+              ) : null}
               <dl className="repo-state-snapshot">
                 <div>
                   <dt>Branch</dt>

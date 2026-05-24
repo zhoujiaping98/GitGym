@@ -625,6 +625,137 @@ describe("App", () => {
     expect(within(sessionCard).queryByText("Branch")).not.toBeInTheDocument();
   });
 
+  it("refreshes repo state after a terminal command finishes", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const initialTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [],
+    });
+    const completedCommandTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [
+        {
+          id: "cmd-1",
+          command: "git status",
+          phase: "stopped",
+          summary: "Command finished successfully",
+        },
+      ],
+    });
+
+    mockUseTerminalSession.mockReturnValue(initialTerminalState);
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse(
+          mockFetch.mock.calls.filter(
+            ([request]) => String(request).endsWith("/api/v1/practice-sessions/42/repo-state"),
+          ).length === 1
+            ? defaultRepoStatePayload
+            : {
+                data: {
+                  branch: "feature/repo-panel",
+                  head_commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  dirty: true,
+                  changed_files: ["M notes.txt"],
+                  captured_at: "2026-05-23T04:01:00.000Z",
+                },
+              },
+        );
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    const { rerender } = render(<App />);
+
+    expect(await screen.findByText("Clean")).toBeInTheDocument();
+
+    mockUseTerminalSession.mockReturnValue(completedCommandTerminalState);
+    rerender(<App />);
+
+    await waitFor(() => expect(screen.getByText("Dirty")).toBeInTheDocument());
+    expect(screen.getByText("M notes.txt")).toBeInTheDocument();
+  });
+
+  it("keeps the last snapshot visible and marks it stale when refresh fails", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const initialTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [],
+    });
+    const completedCommandTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [
+        {
+          id: "cmd-2",
+          command: "git status",
+          phase: "stopped",
+          summary: "Command finished successfully",
+        },
+      ],
+    });
+
+    mockUseTerminalSession.mockReturnValue(initialTerminalState);
+
+    let repoStateRequestCount = 0;
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        return repoStateRequestCount === 1
+          ? createJsonResponse(defaultRepoStatePayload)
+          : createErrorResponse(502, "Unable to load repository state.");
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    const { rerender } = render(<App />);
+
+    expect(await screen.findByText("main")).toBeInTheDocument();
+
+    mockUseTerminalSession.mockReturnValue(completedCommandTerminalState);
+    rerender(<App />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Repository state may be out of date."),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Clean")).toBeInTheDocument();
+    expect(screen.getByText("main")).toBeInTheDocument();
+  });
+
   it("keeps the workbench visible and marks the card recovering when the terminal degrades", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",

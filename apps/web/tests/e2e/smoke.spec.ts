@@ -163,6 +163,8 @@ async function expectNotActiveElement(target: Locator) {
 
 test.describe("GitGym shell", () => {
   let terminalStub: TerminalStub;
+  let repoStateRequestCount = 0;
+  let repoStateDirty = false;
   const catalogPayload = {
     templates: [{ id: 1, key: "standard", name: "Standard" }],
     scenarios: [
@@ -188,12 +190,35 @@ test.describe("GitGym shell", () => {
 
   test.beforeEach(async ({ page }) => {
     terminalStub = await createTerminalStub();
+    repoStateRequestCount = 0;
+    repoStateDirty = false;
     await routeTerminalWebSocketToStub(page, terminalStub.port);
     await page.route("**/api/v1/templates", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(catalogPayload),
+      });
+    });
+    await page.route("**/api/v1/practice-sessions/*/repo-state", async (route) => {
+      repoStateRequestCount += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            branch: "main",
+            head_commit: repoStateDirty
+              ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            dirty: repoStateDirty,
+            changed_files: repoStateDirty ? ["M notes.txt"] : [],
+            captured_at:
+              repoStateRequestCount > 1
+                ? "2026-05-23T04:01:00.000Z"
+                : "2026-05-23T04:00:00.000Z",
+          },
+        }),
       });
     });
   });
@@ -522,6 +547,33 @@ test.describe("GitGym shell", () => {
     await expect(page.locator(".terminal-window")).toContainText(
       /nothing to commit, working tree clean/,
     );
+  });
+
+  test("updates the repo state card after a mutating terminal command completes", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/practice-sessions/current", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(activeSessionPayload),
+      });
+    });
+
+    await page.goto("/");
+
+    const sessionCard = page.getByLabel("Operational session card");
+    await expect(sessionCard).toContainText("Working tree");
+    await expect(sessionCard).toContainText("Clean");
+
+    await page.getByTestId("live-terminal").click();
+    await page.keyboard.type("echo dirty >> notes.txt");
+    repoStateDirty = true;
+    await page.keyboard.press("Enter");
+
+    await expect(page.getByLabel("Command history")).toContainText("Command finished");
+    await expect(sessionCard).toContainText("Dirty");
+    await expect(sessionCard).toContainText("notes.txt");
   });
 
   test("shows a retryable session error state when lookup fails", async ({

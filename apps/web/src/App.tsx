@@ -173,7 +173,10 @@ export default function App() {
     displayedSession && catalog
       ? catalog.templates.find((entry) => entry.id === displayedSession.templateId) ?? null
       : null;
-  const repoState = useRepoState(displayedSession);
+  const repoState = useRepoState({
+    session: displayedSession,
+    commandHistory: terminalSession.history,
+  });
 
   useEffect(() => {
     if (
