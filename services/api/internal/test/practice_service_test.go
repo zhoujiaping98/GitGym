@@ -550,15 +550,15 @@ func TestPracticeServiceClassifiesResetSessionErrors(t *testing.T) {
 	})
 }
 
-func TestPracticeServiceMarksMissingRunnerWorkspaceOnTerminalConnect(t *testing.T) {
+func TestPracticeServiceOrphanTransitionUpsertsDelayedCleanupJob(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 5, 19, 14, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 5, 24, 16, 0, 0, 0, time.UTC)
 	store := &stubPracticeSessionStore{}
 	runnerClient := &stubRunnerClient{
 		workspace: runner.Workspace{
-			ID:       "ws-terminal-missing",
-			Path:     "/tmp/ws-terminal-missing",
+			ID:       "ws-orphan-cleanup",
+			Path:     "/tmp/ws-orphan-cleanup",
 			Template: "standard",
 		},
 		connectErr: runner.ErrWorkspaceNotFound,
@@ -585,17 +585,21 @@ func TestPracticeServiceMarksMissingRunnerWorkspaceOnTerminalConnect(t *testing.
 	if store.lastUpdatedSession.Status != "orphaned" {
 		t.Fatalf("expected orphaned status, got %q", store.lastUpdatedSession.Status)
 	}
-	if runnerClient.deleteWorkspaceCalls != 1 {
-		t.Fatalf("expected one delayed cleanup request, got %d", runnerClient.deleteWorkspaceCalls)
+	if len(store.upsertCleanupJobCalls) != 1 {
+		t.Fatalf("expected one cleanup job upsert, got %d", len(store.upsertCleanupJobCalls))
 	}
-	if runnerClient.lastDeleteWorkspaceID != "ws-terminal-missing" {
-		t.Fatalf("expected orphaned cleanup for ws-terminal-missing, got %q", runnerClient.lastDeleteWorkspaceID)
+	job := store.upsertCleanupJobCalls[0]
+	if job.PracticeSessionID != created.ID {
+		t.Fatalf("expected cleanup job for session %d, got %d", created.ID, job.PracticeSessionID)
 	}
-	if runnerClient.lastDeleteReason != service.PracticeSessionStatusOrphaned {
-		t.Fatalf("expected orphaned cleanup reason, got %q", runnerClient.lastDeleteReason)
+	if job.WorkspaceID != "ws-orphan-cleanup" {
+		t.Fatalf("expected orphaned cleanup for ws-orphan-cleanup, got %q", job.WorkspaceID)
 	}
-	if runnerClient.lastDeleteDelay != 10*time.Minute {
-		t.Fatalf("expected 10 minute orphan cleanup delay, got %v", runnerClient.lastDeleteDelay)
+	if job.Reason != service.PracticeSessionStatusOrphaned {
+		t.Fatalf("expected orphaned cleanup reason, got %q", job.Reason)
+	}
+	if !job.ScheduledAt.Equal(now.Add(10 * time.Minute)) {
+		t.Fatalf("expected 10 minute orphan cleanup delay, got %v", job.ScheduledAt)
 	}
 }
 
@@ -680,68 +684,15 @@ func TestPracticeServiceMarksMissingRunnerWorkspaceOnRepoStateLookup(t *testing.
 	if store.lastUpdatedSession.Status != service.PracticeSessionStatusOrphaned {
 		t.Fatalf("expected orphaned status, got %q", store.lastUpdatedSession.Status)
 	}
-	if runnerClient.deleteWorkspaceCalls != 1 {
-		t.Fatalf("expected one delayed cleanup request, got %d", runnerClient.deleteWorkspaceCalls)
+	if len(store.upsertCleanupJobCalls) != 1 {
+		t.Fatalf("expected one cleanup job upsert, got %d", len(store.upsertCleanupJobCalls))
 	}
-	if runnerClient.lastDeleteWorkspaceID != created.RunnerRef {
-		t.Fatalf("expected orphaned cleanup for %q, got %q", created.RunnerRef, runnerClient.lastDeleteWorkspaceID)
+	job := store.upsertCleanupJobCalls[0]
+	if job.WorkspaceID != created.RunnerRef {
+		t.Fatalf("expected orphaned cleanup for %q, got %q", created.RunnerRef, job.WorkspaceID)
 	}
-	if runnerClient.lastDeleteReason != service.PracticeSessionStatusOrphaned {
-		t.Fatalf("expected orphaned cleanup reason, got %q", runnerClient.lastDeleteReason)
-	}
-}
-
-func TestPracticeServiceSchedulesOrphanCleanupWithDetachedContext(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 5, 19, 14, 15, 0, 0, time.UTC)
-	store := &stubPracticeSessionStore{}
-	sawCanceledContext := false
-	sawDeadline := false
-	runnerClient := &stubRunnerClient{
-		workspace: runner.Workspace{
-			ID:       "ws-terminal-detached",
-			Path:     "/tmp/ws-terminal-detached",
-			Template: "standard",
-		},
-		connectErr: runner.ErrWorkspaceNotFound,
-		deleteWorkspaceFunc: func(ctx context.Context, _ int, _ string, _ string, _ time.Duration) error {
-			if ctx.Err() != nil {
-				sawCanceledContext = true
-			}
-			if _, ok := ctx.Deadline(); ok {
-				sawDeadline = true
-			}
-			return nil
-		},
-	}
-	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
-
-	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
-		UserID:     42,
-		ScenarioID: 1,
-		TemplateID: 1,
-	})
-	if err != nil {
-		t.Fatalf("create practice session: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err = svc.ConnectTerminal(ctx, 42, created.ID)
-
-	if !errors.Is(err, service.ErrPracticeSessionOrphaned) {
-		t.Fatalf("expected orphaned session error, got %v", err)
-	}
-	if runnerClient.deleteWorkspaceCalls != 1 {
-		t.Fatalf("expected one cleanup attempt during orphan transition, got %d", runnerClient.deleteWorkspaceCalls)
-	}
-	if sawCanceledContext {
-		t.Fatal("expected cleanup scheduling to detach from the canceled caller context")
-	}
-	if !sawDeadline {
-		t.Fatal("expected cleanup scheduling context to carry a timeout")
+	if job.Reason != service.PracticeSessionStatusOrphaned {
+		t.Fatalf("expected orphaned cleanup reason, got %q", job.Reason)
 	}
 }
 
@@ -778,19 +729,19 @@ func TestPracticeServiceCurrentSessionRemainsRecoverableAfterTerminalOrphansWork
 	}
 }
 
-func TestPracticeServiceExpiresStaleSessionsInSweep(t *testing.T) {
+func TestPracticeServiceExpireSweepUpsertsCleanupJob(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 5, 19, 15, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 5, 24, 15, 0, 0, 0, time.UTC)
 	store := &stubPracticeSessionStore{
 		expirableSessions: []domain.PracticeSession{
 			{
-				ID:               401,
-				UserID:           42,
+				ID:               41,
+				UserID:           7,
 				ScenarioID:       1,
 				TemplateID:       1,
-				RunnerRef:        "ws-sweep-expired",
-				WorkspacePathRef: "/tmp/ws-sweep-expired",
+				RunnerRef:        "ws-sweep-cleanup",
+				WorkspacePathRef: "/tmp/ws-sweep-cleanup",
 				Status:           "active",
 				StartedAt:        now.Add(-4 * time.Hour),
 				ExpiresAt:        now.Add(-5 * time.Minute),
@@ -810,8 +761,7 @@ func TestPracticeServiceExpiresStaleSessionsInSweep(t *testing.T) {
 			},
 		},
 	}
-	runnerClient := &stubRunnerClient{}
-	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
+	svc := service.NewPracticeService(store, &stubRunnerClient{}, func() time.Time { return now })
 
 	expiredCount, err := svc.ExpireStalePracticeSessions(context.Background())
 
@@ -839,244 +789,21 @@ func TestPracticeServiceExpiresStaleSessionsInSweep(t *testing.T) {
 	if store.expireResults[0].LastActivityAt != now {
 		t.Fatalf("expected last activity at %v, got %v", now, store.expireResults[0].LastActivityAt)
 	}
-	if runnerClient.deleteWorkspaceCalls != 1 {
-		t.Fatalf("expected one cleanup request, got %d", runnerClient.deleteWorkspaceCalls)
+	if len(store.upsertCleanupJobCalls) != 1 {
+		t.Fatalf("expected one cleanup job upsert, got %d", len(store.upsertCleanupJobCalls))
 	}
-	if runnerClient.lastDeleteWorkspaceID != "ws-sweep-expired" {
-		t.Fatalf("expected cleanup for ws-sweep-expired, got %q", runnerClient.lastDeleteWorkspaceID)
+	job := store.upsertCleanupJobCalls[0]
+	if job.PracticeSessionID != 41 {
+		t.Fatalf("expected cleanup job for session 41, got %d", job.PracticeSessionID)
 	}
-	if runnerClient.lastDeleteReason != service.PracticeSessionStatusExpired {
-		t.Fatalf("expected expired cleanup reason, got %q", runnerClient.lastDeleteReason)
+	if job.WorkspaceID != "ws-sweep-cleanup" {
+		t.Fatalf("expected workspace id ws-sweep-cleanup, got %q", job.WorkspaceID)
 	}
-	if runnerClient.lastDeleteDelay != 0 {
-		t.Fatalf("expected immediate cleanup delay, got %v", runnerClient.lastDeleteDelay)
+	if job.Reason != service.PracticeSessionStatusExpired {
+		t.Fatalf("expected cleanup reason expired, got %q", job.Reason)
 	}
-}
-
-func TestPracticeServiceRetriesFailedExpiredCleanupDuringFutureSweeps(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 5, 19, 15, 30, 0, 0, time.UTC)
-	store := &stubPracticeSessionStore{
-		expirableSessions: []domain.PracticeSession{
-			{
-				ID:               451,
-				UserID:           42,
-				ScenarioID:       1,
-				TemplateID:       1,
-				RunnerRef:        "ws-sweep-retry",
-				WorkspacePathRef: "/tmp/ws-sweep-retry",
-				Status:           "active",
-				StartedAt:        now.Add(-4 * time.Hour),
-				ExpiresAt:        now.Add(-time.Minute),
-				LastActivityAt:   now.Add(-10 * time.Minute),
-			},
-		},
-	}
-	runnerClient := &stubRunnerClient{
-		deleteWorkspaceFunc: func(context.Context, int, string, string, time.Duration) error {
-			return errors.New("runner cleanup unavailable")
-		},
-	}
-	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
-
-	expiredCount, err := svc.ExpireStalePracticeSessions(context.Background())
-	if err != nil {
-		t.Fatalf("expire stale practice sessions first sweep: %v", err)
-	}
-	if expiredCount != 1 {
-		t.Fatalf("expected one expired session on first sweep, got %d", expiredCount)
-	}
-	if runnerClient.deleteWorkspaceCalls != 1 {
-		t.Fatalf("expected one cleanup attempt on first sweep, got %d", runnerClient.deleteWorkspaceCalls)
-	}
-	if store.expireResults[0].Status != service.PracticeSessionStatusExpired {
-		t.Fatalf("expected session to transition to expired, got %q", store.expireResults[0].Status)
-	}
-
-	runnerClient.deleteWorkspaceFunc = func(context.Context, int, string, string, time.Duration) error {
-		return nil
-	}
-
-	expiredCount, err = svc.ExpireStalePracticeSessions(context.Background())
-	if err != nil {
-		t.Fatalf("expire stale practice sessions second sweep: %v", err)
-	}
-	if expiredCount != 0 {
-		t.Fatalf("expected no newly expired sessions on second sweep, got %d", expiredCount)
-	}
-	if runnerClient.deleteWorkspaceCalls != 2 {
-		t.Fatalf("expected failed cleanup to be retried on second sweep, got %d attempts", runnerClient.deleteWorkspaceCalls)
-	}
-	if runnerClient.lastDeleteWorkspaceID != "ws-sweep-retry" {
-		t.Fatalf("expected retry cleanup for ws-sweep-retry, got %q", runnerClient.lastDeleteWorkspaceID)
-	}
-	if runnerClient.lastDeleteReason != service.PracticeSessionStatusExpired {
-		t.Fatalf("expected expired retry reason, got %q", runnerClient.lastDeleteReason)
-	}
-	if runnerClient.lastDeleteDelay != 0 {
-		t.Fatalf("expected immediate retry cleanup, got %v", runnerClient.lastDeleteDelay)
-	}
-}
-
-func TestPracticeServiceRetriesFailedOrphanCleanupOnRepeatedSessionChecks(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 5, 19, 16, 0, 0, 0, time.UTC)
-	store := &stubPracticeSessionStore{}
-	runnerClient := &stubRunnerClient{
-		workspace: runner.Workspace{
-			ID:       "ws-orphan-retry",
-			Path:     "/tmp/ws-orphan-retry",
-			Template: "standard",
-		},
-		connectErr: runner.ErrWorkspaceNotFound,
-		deleteWorkspaceFunc: func(_ context.Context, call int, workspaceID string, reason string, deleteAfter time.Duration) error {
-			if call == 1 {
-				return errors.New("runner cleanup unavailable")
-			}
-			return nil
-		},
-	}
-	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
-
-	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
-		UserID:     42,
-		ScenarioID: 1,
-		TemplateID: 1,
-	})
-	if err != nil {
-		t.Fatalf("create practice session: %v", err)
-	}
-
-	_, err = svc.ConnectTerminal(context.Background(), 42, created.ID)
-	if !errors.Is(err, service.ErrPracticeSessionOrphaned) {
-		t.Fatalf("expected orphaned session error, got %v", err)
-	}
-	if store.lastUpdatedSession.Status != service.PracticeSessionStatusOrphaned {
-		t.Fatalf("expected orphaned status after missing terminal, got %q", store.lastUpdatedSession.Status)
-	}
-	if runnerClient.deleteWorkspaceCalls != 1 {
-		t.Fatalf("expected one cleanup attempt during orphan transition, got %d", runnerClient.deleteWorkspaceCalls)
-	}
-
-	_, err = svc.CurrentPracticeSession(context.Background(), 42)
-	if !errors.Is(err, service.ErrPracticeSessionOrphaned) {
-		t.Fatalf("expected orphaned session on repeated check, got %v", err)
-	}
-	if runnerClient.deleteWorkspaceCalls != 2 {
-		t.Fatalf("expected failed orphan cleanup to retry on repeated check, got %d attempts", runnerClient.deleteWorkspaceCalls)
-	}
-	if runnerClient.lastDeleteWorkspaceID != "ws-orphan-retry" {
-		t.Fatalf("expected retry cleanup for ws-orphan-retry, got %q", runnerClient.lastDeleteWorkspaceID)
-	}
-	if runnerClient.lastDeleteReason != service.PracticeSessionStatusOrphaned {
-		t.Fatalf("expected orphaned cleanup reason, got %q", runnerClient.lastDeleteReason)
-	}
-	if runnerClient.lastDeleteDelay != 10*time.Minute {
-		t.Fatalf("expected orphan cleanup retry to preserve grace delay, got %v", runnerClient.lastDeleteDelay)
-	}
-}
-
-func TestPracticeServiceRetriesPendingOrphanCleanupWithDetachedContext(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 5, 19, 16, 15, 0, 0, time.UTC)
-	store := &stubPracticeSessionStore{}
-	sawCanceledRetryContext := false
-	sawRetryDeadline := false
-	runnerClient := &stubRunnerClient{
-		workspace: runner.Workspace{
-			ID:       "ws-orphan-detached-retry",
-			Path:     "/tmp/ws-orphan-detached-retry",
-			Template: "standard",
-		},
-		connectErr: runner.ErrWorkspaceNotFound,
-		deleteWorkspaceFunc: func(ctx context.Context, call int, _ string, _ string, _ time.Duration) error {
-			if call == 1 {
-				return errors.New("runner cleanup unavailable")
-			}
-			if ctx.Err() != nil {
-				sawCanceledRetryContext = true
-			}
-			if _, ok := ctx.Deadline(); ok {
-				sawRetryDeadline = true
-			}
-			return nil
-		},
-	}
-	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
-
-	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
-		UserID:     42,
-		ScenarioID: 1,
-		TemplateID: 1,
-	})
-	if err != nil {
-		t.Fatalf("create practice session: %v", err)
-	}
-
-	_, err = svc.ConnectTerminal(context.Background(), 42, created.ID)
-	if !errors.Is(err, service.ErrPracticeSessionOrphaned) {
-		t.Fatalf("expected orphaned session error, got %v", err)
-	}
-	if runnerClient.deleteWorkspaceCalls != 1 {
-		t.Fatalf("expected one cleanup attempt during orphan transition, got %d", runnerClient.deleteWorkspaceCalls)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err = svc.CurrentPracticeSession(ctx, 42)
-	if !errors.Is(err, service.ErrPracticeSessionOrphaned) {
-		t.Fatalf("expected orphaned session on repeated check, got %v", err)
-	}
-	if runnerClient.deleteWorkspaceCalls != 2 {
-		t.Fatalf("expected pending orphan cleanup retry, got %d attempts", runnerClient.deleteWorkspaceCalls)
-	}
-	if sawCanceledRetryContext {
-		t.Fatal("expected orphan cleanup retry to detach from the canceled caller context")
-	}
-	if !sawRetryDeadline {
-		t.Fatal("expected orphan cleanup retry context to carry a timeout")
-	}
-}
-
-func TestPracticeServiceToleratesWorkspaceNotFoundDuringExpiredCleanup(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 5, 19, 16, 30, 0, 0, time.UTC)
-	store := &stubPracticeSessionStore{
-		expirableSessions: []domain.PracticeSession{
-			{
-				ID:               452,
-				UserID:           42,
-				ScenarioID:       1,
-				TemplateID:       1,
-				RunnerRef:        "ws-cleanup-missing",
-				WorkspacePathRef: "/tmp/ws-cleanup-missing",
-				Status:           "active",
-				StartedAt:        now.Add(-3 * time.Hour),
-				ExpiresAt:        now.Add(-time.Minute),
-				LastActivityAt:   now.Add(-15 * time.Minute),
-			},
-		},
-	}
-	runnerClient := &stubRunnerClient{deleteErr: runner.ErrWorkspaceNotFound}
-	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
-
-	expiredCount, err := svc.ExpireStalePracticeSessions(context.Background())
-	if err != nil {
-		t.Fatalf("expire stale practice sessions: %v", err)
-	}
-	if expiredCount != 1 {
-		t.Fatalf("expected one expired session, got %d", expiredCount)
-	}
-	if runnerClient.deleteWorkspaceCalls != 1 {
-		t.Fatalf("expected one cleanup request, got %d", runnerClient.deleteWorkspaceCalls)
-	}
-	if runnerClient.lastDeleteWorkspaceID != "ws-cleanup-missing" {
-		t.Fatalf("expected cleanup request for ws-cleanup-missing, got %q", runnerClient.lastDeleteWorkspaceID)
+	if !job.ScheduledAt.Equal(now) {
+		t.Fatalf("expected immediate cleanup scheduling at %v, got %v", now, job.ScheduledAt)
 	}
 }
 
@@ -1149,15 +876,17 @@ func TestRunnerClientDeleteWorkspaceMapsNotFound(t *testing.T) {
 }
 
 type stubPracticeSessionStore struct {
-	createCalls        int
-	updateCalls        int
-	expireCalls        int
-	lastSession        domain.PracticeSession
-	savedSession       domain.PracticeSession
-	lastUpdatedSession domain.PracticeSession
-	lastExpireBefore   time.Time
-	expirableSessions  []domain.PracticeSession
-	expireResults      []domain.PracticeSession
+	createCalls           int
+	updateCalls           int
+	expireCalls           int
+	lastSession           domain.PracticeSession
+	savedSession          domain.PracticeSession
+	lastUpdatedSession    domain.PracticeSession
+	lastExpireBefore      time.Time
+	expirableSessions     []domain.PracticeSession
+	expireResults         []domain.PracticeSession
+	upsertCleanupJobCalls []stubWorkspaceCleanupJob
+	upsertCleanupJobErr   error
 }
 
 func (s *stubPracticeSessionStore) CreatePracticeSession(_ context.Context, session domain.PracticeSession) (domain.PracticeSession, error) {
@@ -1209,6 +938,30 @@ func (s *stubPracticeSessionStore) ExpirePracticeSessions(_ context.Context, bef
 	}
 
 	return append([]domain.PracticeSession(nil), s.expireResults...), nil
+}
+
+func (s *stubPracticeSessionStore) UpsertWorkspaceCleanupJob(_ context.Context, job service.WorkspaceCleanupJob) error {
+	if s.upsertCleanupJobErr != nil {
+		return s.upsertCleanupJobErr
+	}
+
+	s.upsertCleanupJobCalls = append(s.upsertCleanupJobCalls, stubWorkspaceCleanupJob{
+		PracticeSessionID: job.PracticeSessionID,
+		WorkspaceID:       job.WorkspaceID,
+		Reason:            job.Reason,
+		ScheduledAt:       job.ScheduledAt,
+		Status:            job.Status,
+	})
+
+	return nil
+}
+
+type stubWorkspaceCleanupJob struct {
+	PracticeSessionID uint64
+	WorkspaceID       string
+	Reason            string
+	ScheduledAt       time.Time
+	Status            string
 }
 
 type stubRunnerClient struct {
