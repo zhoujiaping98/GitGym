@@ -63,6 +63,11 @@ type ScenarioPickerState =
       error: string | null;
     };
 
+type LifecycleRepoRefreshTrigger = Extract<
+  RepoRefreshContext["trigger"],
+  "session_create" | "session_reset" | "session_sync"
+>;
+
 function AppStateShell({
   eyebrow,
   title,
@@ -113,6 +118,7 @@ export default function App() {
     trigger: "session_load",
   });
   const unavailableRefreshSessionIdRef = useRef<number | null>(null);
+  const pendingLifecycleRepoRefreshRef = useRef<LifecycleRepoRefreshTrigger | null>(null);
   const lastCompletedCommandKeyRef = useRef<string | null>(null);
   const previousCompletedCountRef = useRef(0);
   const effectiveSession = signedOutOverride ? null : currentSession.session;
@@ -186,6 +192,7 @@ export default function App() {
 
   useEffect(() => {
     if (!displayedSession) {
+      pendingLifecycleRepoRefreshRef.current = null;
       lastCompletedCommandKeyRef.current = null;
       previousCompletedCountRef.current = 0;
       setRepoRefreshContext((current) =>
@@ -205,13 +212,23 @@ export default function App() {
         ? null
         : `${initialCompletedCommands.length}:${initialCompletedCommandId}`;
     previousCompletedCountRef.current = initialCompletedCommands.length;
-    setRepoRefreshContext((current) =>
-      current.trigger === "session_load" &&
-      current.commandId === undefined &&
-      current.commandText === undefined
+    setRepoRefreshContext((current) => {
+      const pendingLifecycleTrigger = pendingLifecycleRepoRefreshRef.current;
+      if (pendingLifecycleTrigger) {
+        pendingLifecycleRepoRefreshRef.current = null;
+        return current.trigger === pendingLifecycleTrigger &&
+          current.commandId === undefined &&
+          current.commandText === undefined
+          ? current
+          : { trigger: pendingLifecycleTrigger };
+      }
+
+      return current.trigger === "session_load" &&
+        current.commandId === undefined &&
+        current.commandText === undefined
         ? current
-        : { trigger: "session_load" },
-    );
+        : { trigger: "session_load" };
+    });
   }, [displayedSession?.id]);
 
   useEffect(() => {
@@ -411,8 +428,14 @@ export default function App() {
         return;
       }
 
+      if (action === "new-session") {
+        pendingLifecycleRepoRefreshRef.current = "session_create";
+      }
       setSessionOverride(refreshedSession);
       setActionError(null);
+      setRepoRefreshContext({
+        trigger: action === "new-session" ? "session_create" : "session_reset",
+      });
     } catch (error) {
       setSessionOverride(fallbackSession ?? optimisticSession);
       setActionError({
@@ -429,8 +452,6 @@ export default function App() {
   }
 
   async function retrySessionRefresh() {
-    setRepoRefreshContext({ trigger: "session_sync" });
-
     try {
       const refreshedSession = await currentSession.refresh();
       if (!actionError?.retryExpectedSessionId) {
@@ -456,6 +477,7 @@ export default function App() {
 
       setSessionOverride(refreshedSession);
       setActionError(null);
+      setRepoRefreshContext({ trigger: "session_sync" });
     } catch (error) {
       setActionError({
         message: error instanceof Error ? error.message : "Unable to refresh the current session.",
@@ -525,7 +547,6 @@ export default function App() {
     setPendingAction("new-session");
     void createPracticeSession({ scenarioId: selectedScenarioId })
       .then((nextSession) => {
-        setRepoRefreshContext({ trigger: "session_create" });
         setScenarioPickerState({ status: "closed" });
         if (!fallbackSession) {
           setSessionOverride(nextSession);
@@ -570,7 +591,6 @@ export default function App() {
 
             setActionError(null);
             setPendingAction("reset");
-            setRepoRefreshContext({ trigger: "session_reset" });
             void resetPracticeSession(session.id)
               .then(() => {
                 return reconcileSessionAction("reset", session.id, {

@@ -685,6 +685,62 @@ describe("App", () => {
     expect(screen.getByText("reset/main")).toBeInTheDocument();
   });
 
+  it("does not stamp reset lifecycle attribution when reset reconciliation fails", async () => {
+    const refresh = vi.fn().mockResolvedValue(null);
+
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh,
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        history: [],
+      }),
+    );
+
+    let repoStateRequestCount = 0;
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/reset") && init?.method === "POST") {
+        return createJsonResponse({ ok: true });
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        return createJsonResponse(defaultRepoStatePayload);
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    await screen.findByText("Snapshot loaded");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Reset completed, but the server did not return a current session."),
+      ).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("Snapshot refreshed after reset")).not.toBeInTheDocument();
+    expect(screen.getByText("Snapshot loaded")).toBeInTheDocument();
+    expect(repoStateRequestCount).toBe(1);
+  });
+
   it("renders an inline unavailable repo state when the snapshot cannot be loaded", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
