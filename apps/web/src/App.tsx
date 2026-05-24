@@ -114,6 +114,7 @@ export default function App() {
   });
   const unavailableRefreshSessionIdRef = useRef<number | null>(null);
   const lastCompletedCommandKeyRef = useRef<string | null>(null);
+  const previousCompletedCountRef = useRef(0);
   const effectiveSession = signedOutOverride ? null : currentSession.session;
   const hasSessionOverride = sessionOverride !== undefined;
   const displayedSession = hasSessionOverride ? sessionOverride : effectiveSession;
@@ -186,6 +187,7 @@ export default function App() {
   useEffect(() => {
     if (!displayedSession) {
       lastCompletedCommandKeyRef.current = null;
+      previousCompletedCountRef.current = 0;
       setRepoRefreshContext((current) =>
         current.trigger === "session_load" &&
         current.commandId === undefined &&
@@ -202,6 +204,7 @@ export default function App() {
       initialCompletedCommandId === null
         ? null
         : `${initialCompletedCommands.length}:${initialCompletedCommandId}`;
+    previousCompletedCountRef.current = initialCompletedCommands.length;
     setRepoRefreshContext((current) =>
       current.trigger === "session_load" &&
       current.commandId === undefined &&
@@ -212,6 +215,10 @@ export default function App() {
   }, [displayedSession?.id]);
 
   useEffect(() => {
+    if (!displayedSession) {
+      return;
+    }
+
     const completedCommands = terminalSession.history.filter((entry) => entry.phase === "stopped");
     const latestCompletedCommand = completedCommands.at(-1) ?? null;
     const latestCompletedCommandKey =
@@ -219,7 +226,15 @@ export default function App() {
         ? null
         : `${completedCommands.length}:${latestCompletedCommand.id}`;
 
-    if (!displayedSession || !latestCompletedCommand || !latestCompletedCommandKey) {
+    if (
+      completedCommands.length < previousCompletedCountRef.current ||
+      terminalSession.history.length === 0
+    ) {
+      lastCompletedCommandKeyRef.current = null;
+    }
+    previousCompletedCountRef.current = completedCommands.length;
+
+    if (!latestCompletedCommand || !latestCompletedCommandKey) {
       return;
     }
 
