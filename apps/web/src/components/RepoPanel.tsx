@@ -77,6 +77,10 @@ function repoAttributionCopy(attribution: RepoAttribution | null) {
     return "Snapshot loaded";
   }
 
+  if (attribution.trigger === "command_complete" && attribution.commandText) {
+    return `Updated after ${attribution.commandText}`;
+  }
+
   return null;
 }
 

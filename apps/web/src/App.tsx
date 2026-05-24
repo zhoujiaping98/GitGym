@@ -109,10 +109,11 @@ export default function App() {
   const [scenarioPickerState, setScenarioPickerState] = useState<ScenarioPickerState>({
     status: "closed",
   });
-  const [repoRefreshContext] = useState<RepoRefreshContext>({
+  const [repoRefreshContext, setRepoRefreshContext] = useState<RepoRefreshContext>({
     trigger: "session_load",
   });
   const unavailableRefreshSessionIdRef = useRef<number | null>(null);
+  const lastCompletedCommandKeyRef = useRef<string | null>(null);
   const effectiveSession = signedOutOverride ? null : currentSession.session;
   const hasSessionOverride = sessionOverride !== undefined;
   const displayedSession = hasSessionOverride ? sessionOverride : effectiveSession;
@@ -181,6 +182,64 @@ export default function App() {
     commandHistory: terminalSession.history,
     refreshContext: repoRefreshContext,
   });
+
+  useEffect(() => {
+    if (!displayedSession) {
+      lastCompletedCommandKeyRef.current = null;
+      setRepoRefreshContext((current) =>
+        current.trigger === "session_load" &&
+        current.commandId === undefined &&
+        current.commandText === undefined
+          ? current
+          : { trigger: "session_load" },
+      );
+      return;
+    }
+
+    const initialCompletedCommands = terminalSession.history.filter((entry) => entry.phase === "stopped");
+    const initialCompletedCommandId = initialCompletedCommands.at(-1)?.id ?? null;
+    lastCompletedCommandKeyRef.current =
+      initialCompletedCommandId === null
+        ? null
+        : `${initialCompletedCommands.length}:${initialCompletedCommandId}`;
+    setRepoRefreshContext((current) =>
+      current.trigger === "session_load" &&
+      current.commandId === undefined &&
+      current.commandText === undefined
+        ? current
+        : { trigger: "session_load" },
+    );
+  }, [displayedSession?.id]);
+
+  useEffect(() => {
+    const completedCommands = terminalSession.history.filter((entry) => entry.phase === "stopped");
+    const latestCompletedCommand = completedCommands.at(-1) ?? null;
+    const latestCompletedCommandKey =
+      latestCompletedCommand === null
+        ? null
+        : `${completedCommands.length}:${latestCompletedCommand.id}`;
+
+    if (!displayedSession || !latestCompletedCommand || !latestCompletedCommandKey) {
+      return;
+    }
+
+    if (lastCompletedCommandKeyRef.current === latestCompletedCommandKey) {
+      return;
+    }
+
+    lastCompletedCommandKeyRef.current = latestCompletedCommandKey;
+    setRepoRefreshContext((current) =>
+      current.trigger === "command_complete" &&
+      current.commandId === latestCompletedCommand.id &&
+      current.commandText === latestCompletedCommand.command
+        ? current
+        : {
+            trigger: "command_complete",
+            commandId: latestCompletedCommand.id,
+            commandText: latestCompletedCommand.command,
+          },
+    );
+  }, [displayedSession, terminalSession.history]);
 
   useEffect(() => {
     if (
