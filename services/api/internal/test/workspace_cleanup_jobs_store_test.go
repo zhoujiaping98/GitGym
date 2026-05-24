@@ -175,6 +175,57 @@ func TestWorkspaceCleanupJobStoreMarksFailureAndReschedules(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCleanupJobStoreReclaimsFailedDueJobs(t *testing.T) {
+	t.Parallel()
+
+	store := newTestMySQLStore(t)
+	sessionID := seedPracticeSession(t, store, seedPracticeSessionParams{
+		userID:     13,
+		scenarioID: 1,
+		templateID: 1,
+		runnerRef:  "ws-cleanup-reclaim-failed",
+		workspace:  "/tmp/ws-cleanup-reclaim-failed",
+		status:     "expired",
+	})
+
+	now := time.Date(2026, 5, 24, 15, 0, 0, 0, time.UTC)
+	if err := store.UpsertWorkspaceCleanupJob(context.Background(), domain.WorkspaceCleanupJob{
+		PracticeSessionID: sessionID,
+		WorkspaceID:       "ws-cleanup-reclaim-failed",
+		Reason:            "expired",
+		ScheduledAt:       now.Add(-5 * time.Minute),
+		Status:            "pending",
+	}); err != nil {
+		t.Fatalf("seed cleanup job: %v", err)
+	}
+
+	seededJobs, err := store.ListWorkspaceCleanupJobsForSession(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("list seeded cleanup jobs: %v", err)
+	}
+	if len(seededJobs) != 1 {
+		t.Fatalf("expected one seeded cleanup job, got %d", len(seededJobs))
+	}
+
+	if err := store.MarkWorkspaceCleanupJobFailed(context.Background(), seededJobs[0].ID, now.Add(-time.Minute), "transient runner timeout"); err != nil {
+		t.Fatalf("mark cleanup failure: %v", err)
+	}
+
+	claimedJobs, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), now, 10)
+	if err != nil {
+		t.Fatalf("claim due cleanup jobs: %v", err)
+	}
+	if len(claimedJobs) != 1 {
+		t.Fatalf("expected one reclaimed cleanup job, got %d", len(claimedJobs))
+	}
+	if claimedJobs[0].ID != seededJobs[0].ID {
+		t.Fatalf("expected reclaimed cleanup job id %d, got %d", seededJobs[0].ID, claimedJobs[0].ID)
+	}
+	if claimedJobs[0].Status != "running" {
+		t.Fatalf("expected reclaimed cleanup job status running, got %q", claimedJobs[0].Status)
+	}
+}
+
 type seedPracticeSessionParams struct {
 	userID     uint64
 	scenarioID uint64

@@ -151,7 +151,7 @@ SELECT
   created_at,
   updated_at
 FROM workspace_cleanup_jobs
-WHERE status = ? AND scheduled_at <= ?
+WHERE status IN (?, ?) AND scheduled_at <= ?
 ORDER BY scheduled_at ASC, id ASC
 LIMIT ?
 FOR UPDATE
@@ -445,7 +445,7 @@ func (s *MySQLStore) ClaimDueWorkspaceCleanupJobs(ctx context.Context, now time.
 		_ = tx.Rollback()
 	}()
 
-	rows, err := tx.QueryContext(ctx, claimDueWorkspaceCleanupJobsQuery, "pending", now, limit)
+	rows, err := tx.QueryContext(ctx, claimDueWorkspaceCleanupJobsQuery, "pending", "failed", now, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query due workspace cleanup jobs: %w", err)
 	}
