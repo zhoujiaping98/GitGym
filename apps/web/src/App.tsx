@@ -13,6 +13,7 @@ import {
   resetPracticeSession,
 } from "./lib/api";
 import type { PracticeCatalog, PracticeSession } from "./types";
+import type { RepoRefreshContext } from "./hooks/useRepoState";
 
 function templateLabel(templateId: number | null, catalog: PracticeCatalog | null) {
   const template = catalog?.templates.find((entry) => entry.id === templateId);
@@ -109,6 +110,9 @@ export default function App() {
   const [scenarioPickerState, setScenarioPickerState] = useState<ScenarioPickerState>({
     status: "closed",
   });
+  const [repoRefreshContext] = useState<RepoRefreshContext>({
+    trigger: "session_load",
+  });
   const unavailableRefreshSessionIdRef = useRef<number | null>(null);
   const effectiveSession = signedOutOverride ? null : currentSession.session;
   const hasSessionOverride = sessionOverride !== undefined;
@@ -173,9 +177,10 @@ export default function App() {
     displayedSession && catalog
       ? catalog.templates.find((entry) => entry.id === displayedSession.templateId) ?? null
       : null;
-  const repoState = useRepoState({
+  const { repoState, repoAttribution } = useRepoState({
     session: displayedSession,
     commandHistory: terminalSession.history,
+    refreshContext: repoRefreshContext,
   });
 
   useEffect(() => {
@@ -594,6 +599,7 @@ export default function App() {
             scenarioName={displayedScenario?.name ?? null}
             templateName={displayedTemplate?.name ?? null}
             repoState={repoState}
+            repoAttribution={repoAttribution}
           />
         </main>
       ) : currentSession.status === "loading" ? (

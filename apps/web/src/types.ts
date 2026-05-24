@@ -49,6 +49,20 @@ export type CommandHistoryEntry = {
   summary?: string;
 };
 
+export type RepoRefreshTrigger =
+  | "session_load"
+  | "session_create"
+  | "session_reset"
+  | "session_sync"
+  | "command_complete";
+
+export type RepoAttribution = {
+  trigger: RepoRefreshTrigger;
+  capturedAt: string;
+  commandId?: string;
+  commandText?: string;
+};
+
 export type RepoStateSnapshot = {
   branch: string;
   headCommit: string;

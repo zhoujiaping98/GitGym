@@ -1,7 +1,12 @@
 import { CommandHistoryPanel } from "./CommandHistoryPanel";
 import { RepoPanel } from "./RepoPanel";
 import { TerminalPanel } from "./TerminalPanel";
-import type { PracticeSession, RepoStateView, TerminalSessionState } from "../types";
+import type {
+  PracticeSession,
+  RepoAttribution,
+  RepoStateView,
+  TerminalSessionState,
+} from "../types";
 
 type WorkbenchProps = {
   preview?: boolean;
@@ -10,6 +15,7 @@ type WorkbenchProps = {
   scenarioName?: string | null;
   templateName?: string | null;
   repoState?: RepoStateView;
+  repoAttribution?: RepoAttribution | null;
 };
 
 const previewTerminal: TerminalSessionState = {
@@ -30,6 +36,7 @@ export function Workbench({
   scenarioName = null,
   templateName = null,
   repoState = { status: "idle", snapshot: null, error: null },
+  repoAttribution = null,
 }: WorkbenchProps) {
   const shellClassName = preview
     ? "workbench-shell workbench-shell-preview"
@@ -50,6 +57,7 @@ export function Workbench({
         templateName={templateName}
         terminalStatus={terminal.status}
         repoState={repoState}
+        repoAttribution={repoAttribution}
       />
       <CommandHistoryPanel preview={preview} terminal={terminal} />
     </section>

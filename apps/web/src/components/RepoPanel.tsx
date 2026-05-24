@@ -1,4 +1,9 @@
-import type { PracticeSession, RepoStateView, TerminalSessionState } from "../types";
+import type {
+  PracticeSession,
+  RepoAttribution,
+  RepoStateView,
+  TerminalSessionState,
+} from "../types";
 
 type RepoPanelProps = {
   preview?: boolean;
@@ -7,6 +12,7 @@ type RepoPanelProps = {
   templateName?: string | null;
   terminalStatus?: TerminalSessionState["status"];
   repoState?: RepoStateView;
+  repoAttribution?: RepoAttribution | null;
 };
 
 function formatDate(value: string) {
@@ -62,6 +68,18 @@ function shortHead(headCommit: string) {
   return headCommit.slice(0, 7);
 }
 
+function repoAttributionCopy(attribution: RepoAttribution | null) {
+  if (!attribution) {
+    return null;
+  }
+
+  if (attribution.trigger === "session_load") {
+    return "Snapshot loaded";
+  }
+
+  return null;
+}
+
 export function RepoPanel({
   preview = false,
   session,
@@ -69,6 +87,7 @@ export function RepoPanel({
   templateName = null,
   terminalStatus = "idle",
   repoState = { status: "idle", snapshot: null, error: null },
+  repoAttribution = null,
 }: RepoPanelProps) {
   if (preview || !session) {
     return (
@@ -92,6 +111,7 @@ export function RepoPanel({
 
   const healthLabel = getHealthLabel(terminalStatus, session.status);
   const healthTone = getHealthTone(terminalStatus, session.status);
+  const attributionCopy = repoAttributionCopy(repoAttribution);
   const lifecycleFacts = [
     { label: "Started", value: formatDate(session.startedAt) },
     { label: "Last activity", value: formatDate(session.lastActivityAt) },
@@ -143,6 +163,9 @@ export function RepoPanel({
             ) : null}
             {repoState.status === "error" ? (
               <span className="repo-state-inline-note">Repository state unavailable.</span>
+            ) : null}
+            {attributionCopy ? (
+              <span className="repo-state-inline-note">{attributionCopy}</span>
             ) : null}
           </div>
           {repoState.status === "ready" || repoState.status === "stale" ? (

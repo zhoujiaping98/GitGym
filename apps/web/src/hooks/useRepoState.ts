@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPracticeRepoState } from "../lib/api";
-import type { CommandHistoryEntry, PracticeSession, RepoStateView } from "../types";
+import type {
+  CommandHistoryEntry,
+  PracticeSession,
+  RepoAttribution,
+  RepoRefreshTrigger,
+  RepoStateView,
+} from "../types";
 
 const idleState: RepoStateView = {
   status: "idle",
@@ -8,9 +14,21 @@ const idleState: RepoStateView = {
   error: null,
 };
 
+export type RepoRefreshContext = {
+  trigger: RepoRefreshTrigger;
+  commandId?: string;
+  commandText?: string;
+};
+
 type UseRepoStateOptions = {
   session: PracticeSession | null;
   commandHistory: CommandHistoryEntry[];
+  refreshContext: RepoRefreshContext;
+};
+
+type UseRepoStateResult = {
+  repoState: RepoStateView;
+  repoAttribution: RepoAttribution | null;
 };
 
 function getRepoStateError(error: unknown) {
@@ -20,8 +38,10 @@ function getRepoStateError(error: unknown) {
 export function useRepoState({
   session,
   commandHistory,
-}: UseRepoStateOptions): RepoStateView {
+  refreshContext,
+}: UseRepoStateOptions): UseRepoStateResult {
   const [state, setState] = useState<RepoStateView>(idleState);
+  const [attribution, setAttribution] = useState<RepoAttribution | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const lastCompletedCommandKeyRef = useRef<string | null>(null);
   const lastSessionIdRef = useRef<number | null>(null);
@@ -40,12 +60,16 @@ export function useRepoState({
       lastCompletedCommandKeyRef.current = null;
       previousCompletedCountRef.current = 0;
       setState(idleState);
+      setAttribution(null);
       return;
     }
 
     const controller = new AbortController();
     const isSameSession = lastSessionIdRef.current === session.id;
     lastSessionIdRef.current = session.id;
+    if (!isSameSession) {
+      setAttribution(null);
+    }
     setState((current) =>
       isSameSession && current.snapshot
         ? {
@@ -66,6 +90,12 @@ export function useRepoState({
           status: "ready",
           snapshot,
           error: null,
+        });
+        setAttribution({
+          trigger: refreshContext.trigger,
+          capturedAt: snapshot.capturedAt,
+          commandId: refreshContext.commandId,
+          commandText: refreshContext.commandText,
         });
       })
       .catch((error: unknown) => {
@@ -90,7 +120,7 @@ export function useRepoState({
       });
 
     return () => controller.abort();
-  }, [refreshToken, session]);
+  }, [refreshContext, refreshToken, session]);
 
   useEffect(() => {
     if (!session) {
@@ -124,5 +154,8 @@ export function useRepoState({
     setRefreshToken((value) => value + 1);
   }, [commandHistory.length, completedCommandCount, latestCompletedCommandKey, session]);
 
-  return state;
+  return {
+    repoState: state,
+    repoAttribution: attribution,
+  };
 }

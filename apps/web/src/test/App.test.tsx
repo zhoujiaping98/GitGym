@@ -520,6 +520,44 @@ describe("App", () => {
     expect(within(sessionCard).getByText("Clean")).toBeInTheDocument();
   });
 
+  it("renders neutral attribution for the initial repo snapshot load", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        history: [],
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse(defaultRepoStatePayload);
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    const sessionCard = await screen.findByLabelText("Operational session card");
+    expect(await within(sessionCard).findByText("Snapshot loaded")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("main")).toBeInTheDocument();
+  });
+
   it("refreshes repo snapshot when the same session id is reconciled with a new session object", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
