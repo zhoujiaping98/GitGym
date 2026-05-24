@@ -12,8 +12,7 @@ import {
   logout,
   resetPracticeSession,
 } from "./lib/api";
-import type { PracticeCatalog, PracticeSession } from "./types";
-import type { RepoRefreshContext } from "./hooks/useRepoState";
+import type { PracticeCatalog, PracticeSession, RepoRefreshContext } from "./types";
 
 function templateLabel(templateId: number | null, catalog: PracticeCatalog | null) {
   const template = catalog?.templates.find((entry) => entry.id === templateId);

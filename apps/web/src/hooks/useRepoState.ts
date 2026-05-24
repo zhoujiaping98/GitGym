@@ -4,7 +4,7 @@ import type {
   CommandHistoryEntry,
   PracticeSession,
   RepoAttribution,
-  RepoRefreshTrigger,
+  RepoRefreshContext,
   RepoStateView,
 } from "../types";
 
@@ -12,12 +12,6 @@ const idleState: RepoStateView = {
   status: "idle",
   snapshot: null,
   error: null,
-};
-
-export type RepoRefreshContext = {
-  trigger: RepoRefreshTrigger;
-  commandId?: string;
-  commandText?: string;
 };
 
 type UseRepoStateOptions = {

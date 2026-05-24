@@ -63,6 +63,12 @@ export type RepoAttribution = {
   commandText?: string;
 };
 
+export type RepoRefreshContext = {
+  trigger: RepoRefreshTrigger;
+  commandId?: string;
+  commandText?: string;
+};
+
 export type RepoStateSnapshot = {
   branch: string;
   headCommit: string;
