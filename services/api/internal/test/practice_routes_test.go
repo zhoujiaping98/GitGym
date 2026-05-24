@@ -1055,6 +1055,10 @@ func (s *persistentStubStore) ExpirePracticeSessions(ctx context.Context, before
 	return s.practiceSessions.ExpirePracticeSessions(ctx, before, endedAt)
 }
 
+func (s *persistentStubStore) UpsertWorkspaceCleanupJob(ctx context.Context, job domain.WorkspaceCleanupJob) error {
+	return s.practiceSessions.UpsertWorkspaceCleanupJob(ctx, job)
+}
+
 func (s *catalogPersistentStubStore) ListPracticeTemplates(context.Context) ([]service.PracticeTemplate, error) {
 	if s.templatesErr != nil {
 		return nil, s.templatesErr
