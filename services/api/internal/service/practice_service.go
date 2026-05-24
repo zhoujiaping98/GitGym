@@ -56,21 +56,13 @@ type CreatePracticeSessionInput struct {
 	TemplateID uint64
 }
 
-type WorkspaceCleanupJob struct {
-	PracticeSessionID uint64
-	WorkspaceID       string
-	Reason            string
-	ScheduledAt       time.Time
-	Status            string
-}
-
 type PracticeSessionStore interface {
 	CreatePracticeSession(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error)
 	CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error)
 	PracticeSessionByID(ctx context.Context, sessionID uint64) (domain.PracticeSession, error)
 	UpdatePracticeSession(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error)
 	ExpirePracticeSessions(ctx context.Context, before time.Time, endedAt time.Time) ([]domain.PracticeSession, error)
-	UpsertWorkspaceCleanupJob(ctx context.Context, job WorkspaceCleanupJob) error
+	UpsertWorkspaceCleanupJob(ctx context.Context, job domain.WorkspaceCleanupJob) error
 }
 
 type PracticeService interface {
@@ -419,7 +411,7 @@ func (s *practiceService) upsertWorkspaceCleanupJob(
 		return
 	}
 
-	job := WorkspaceCleanupJob{
+	job := domain.WorkspaceCleanupJob{
 		PracticeSessionID: session.ID,
 		WorkspaceID:       session.RunnerRef,
 		Reason:            reason,
@@ -522,6 +514,6 @@ func (s *InMemoryPracticeSessionStore) ExpirePracticeSessions(_ context.Context,
 	return expired, nil
 }
 
-func (s *InMemoryPracticeSessionStore) UpsertWorkspaceCleanupJob(_ context.Context, _ WorkspaceCleanupJob) error {
+func (s *InMemoryPracticeSessionStore) UpsertWorkspaceCleanupJob(_ context.Context, _ domain.WorkspaceCleanupJob) error {
 	return nil
 }

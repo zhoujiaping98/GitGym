@@ -885,7 +885,7 @@ type stubPracticeSessionStore struct {
 	lastExpireBefore      time.Time
 	expirableSessions     []domain.PracticeSession
 	expireResults         []domain.PracticeSession
-	upsertCleanupJobCalls []stubWorkspaceCleanupJob
+	upsertCleanupJobCalls []domain.WorkspaceCleanupJob
 	upsertCleanupJobErr   error
 }
 
@@ -940,28 +940,14 @@ func (s *stubPracticeSessionStore) ExpirePracticeSessions(_ context.Context, bef
 	return append([]domain.PracticeSession(nil), s.expireResults...), nil
 }
 
-func (s *stubPracticeSessionStore) UpsertWorkspaceCleanupJob(_ context.Context, job service.WorkspaceCleanupJob) error {
+func (s *stubPracticeSessionStore) UpsertWorkspaceCleanupJob(_ context.Context, job domain.WorkspaceCleanupJob) error {
 	if s.upsertCleanupJobErr != nil {
 		return s.upsertCleanupJobErr
 	}
 
-	s.upsertCleanupJobCalls = append(s.upsertCleanupJobCalls, stubWorkspaceCleanupJob{
-		PracticeSessionID: job.PracticeSessionID,
-		WorkspaceID:       job.WorkspaceID,
-		Reason:            job.Reason,
-		ScheduledAt:       job.ScheduledAt,
-		Status:            job.Status,
-	})
+	s.upsertCleanupJobCalls = append(s.upsertCleanupJobCalls, job)
 
 	return nil
-}
-
-type stubWorkspaceCleanupJob struct {
-	PracticeSessionID uint64
-	WorkspaceID       string
-	Reason            string
-	ScheduledAt       time.Time
-	Status            string
 }
 
 type stubRunnerClient struct {
