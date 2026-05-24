@@ -756,6 +756,99 @@ describe("App", () => {
     expect(screen.getByText("main")).toBeInTheDocument();
   });
 
+  it("refreshes repo state after reconnect when the same command id appears after history reset", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const initialTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [],
+    });
+    const firstCompletedCommandState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [
+        {
+          id: "42-0",
+          command: "git status",
+          phase: "stopped",
+          summary: "Command finished successfully",
+        },
+      ],
+    });
+    const resetHistoryState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [],
+    });
+    const repeatedCommandIdState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [
+        {
+          id: "42-0",
+          command: "git status",
+          phase: "stopped",
+          summary: "Command finished successfully",
+        },
+      ],
+    });
+
+    let repoStateRequestCount = 0;
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        return createJsonResponse({
+          data: {
+            branch: repoStateRequestCount >= 3 ? "reconnected/main" : "main",
+            head_commit:
+              repoStateRequestCount >= 3
+                ? "cccccccccccccccccccccccccccccccccccccccc"
+                : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            dirty: repoStateRequestCount >= 3,
+            changed_files: repoStateRequestCount >= 3 ? ["M notes.txt"] : [],
+            captured_at: `2026-05-23T04:0${repoStateRequestCount}:00.000Z`,
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    mockUseTerminalSession.mockReturnValue(initialTerminalState);
+
+    const { rerender } = render(<App />);
+
+    expect(await screen.findByText("main")).toBeInTheDocument();
+
+    mockUseTerminalSession.mockReturnValue(firstCompletedCommandState);
+    rerender(<App />);
+
+    await waitFor(() => expect(repoStateRequestCount).toBe(2));
+
+    mockUseTerminalSession.mockReturnValue(resetHistoryState);
+    rerender(<App />);
+
+    mockUseTerminalSession.mockReturnValue(repeatedCommandIdState);
+    rerender(<App />);
+
+    await waitFor(() => expect(screen.getByText("reconnected/main")).toBeInTheDocument());
+    expect(screen.getByText("Dirty")).toBeInTheDocument();
+    expect(repoStateRequestCount).toBe(3);
+  });
+
   it("keeps the workbench visible and marks the card recovering when the terminal degrades", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",

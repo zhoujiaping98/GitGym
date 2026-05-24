@@ -23,17 +23,21 @@ export function useRepoState({
 }: UseRepoStateOptions): RepoStateView {
   const [state, setState] = useState<RepoStateView>(idleState);
   const [refreshToken, setRefreshToken] = useState(0);
-  const lastCompletedCommandIdRef = useRef<string | null>(null);
+  const lastCompletedCommandKeyRef = useRef<string | null>(null);
   const lastSessionIdRef = useRef<number | null>(null);
+  const previousHistoryLengthRef = useRef(0);
   const latestCompletedCommandId = useMemo(
     () =>
       [...commandHistory].reverse().find((entry) => entry.phase === "stopped")?.id ?? null,
     [commandHistory],
   );
+  const latestCompletedCommandKey =
+    latestCompletedCommandId === null ? null : `${commandHistory.length}:${latestCompletedCommandId}`;
 
   useEffect(() => {
     if (!session) {
-      lastCompletedCommandIdRef.current = null;
+      lastCompletedCommandKeyRef.current = null;
+      previousHistoryLengthRef.current = 0;
       setState(idleState);
       return;
     }
@@ -93,21 +97,31 @@ export function useRepoState({
       return;
     }
 
-    lastCompletedCommandIdRef.current = latestCompletedCommandId;
+    lastCompletedCommandKeyRef.current = latestCompletedCommandKey;
+    previousHistoryLengthRef.current = commandHistory.length;
   }, [session?.id]);
 
   useEffect(() => {
-    if (!session || !latestCompletedCommandId) {
+    if (!session) {
       return;
     }
 
-    if (lastCompletedCommandIdRef.current === latestCompletedCommandId) {
+    if (commandHistory.length < previousHistoryLengthRef.current || commandHistory.length === 0) {
+      lastCompletedCommandKeyRef.current = null;
+    }
+    previousHistoryLengthRef.current = commandHistory.length;
+
+    if (!latestCompletedCommandKey) {
       return;
     }
 
-    lastCompletedCommandIdRef.current = latestCompletedCommandId;
+    if (lastCompletedCommandKeyRef.current === latestCompletedCommandKey) {
+      return;
+    }
+
+    lastCompletedCommandKeyRef.current = latestCompletedCommandKey;
     setRefreshToken((value) => value + 1);
-  }, [latestCompletedCommandId, session]);
+  }, [commandHistory.length, latestCompletedCommandKey, session]);
 
   return state;
 }
