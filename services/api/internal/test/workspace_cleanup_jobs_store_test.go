@@ -120,6 +120,50 @@ func TestWorkspaceCleanupJobStoreClaimsDueJobsAndMarksSuccess(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCleanupJobStoreDoesNotReclaimRunningJobImmediately(t *testing.T) {
+	t.Parallel()
+
+	store := newTestMySQLStore(t)
+	sessionID := seedPracticeSession(t, store, seedPracticeSessionParams{
+		userID:     10,
+		scenarioID: 1,
+		templateID: 1,
+		runnerRef:  "ws-cleanup-running",
+		workspace:  "/tmp/ws-cleanup-running",
+		status:     "expired",
+	})
+
+	now := time.Date(2026, 5, 24, 13, 30, 0, 0, time.UTC)
+	if err := store.UpsertWorkspaceCleanupJob(context.Background(), domain.WorkspaceCleanupJob{
+		PracticeSessionID: sessionID,
+		WorkspaceID:       "ws-cleanup-running",
+		Reason:            "expired",
+		ScheduledAt:       now.Add(-time.Minute),
+		Status:            "pending",
+	}); err != nil {
+		t.Fatalf("seed cleanup job: %v", err)
+	}
+
+	firstClaim, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), now, 10)
+	if err != nil {
+		t.Fatalf("first claim due cleanup jobs: %v", err)
+	}
+	if len(firstClaim) != 1 {
+		t.Fatalf("expected one initially claimed job, got %d", len(firstClaim))
+	}
+	if firstClaim[0].Status != "running" {
+		t.Fatalf("expected initially claimed job status running, got %q", firstClaim[0].Status)
+	}
+
+	secondClaim, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), now, 10)
+	if err != nil {
+		t.Fatalf("second claim due cleanup jobs: %v", err)
+	}
+	if len(secondClaim) != 0 {
+		t.Fatalf("expected no reclaimed running jobs, got %d", len(secondClaim))
+	}
+}
+
 func TestWorkspaceCleanupJobStoreMarksFailureAndReschedules(t *testing.T) {
 	t.Parallel()
 
@@ -207,13 +251,51 @@ func TestWorkspaceCleanupJobStoreReclaimsFailedDueJobs(t *testing.T) {
 		t.Fatalf("expected one seeded cleanup job, got %d", len(seededJobs))
 	}
 
-	if err := store.MarkWorkspaceCleanupJobFailed(context.Background(), seededJobs[0].ID, now.Add(-time.Minute), "transient runner timeout"); err != nil {
+	firstClaim, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), now, 10)
+	if err != nil {
+		t.Fatalf("first claim due cleanup jobs: %v", err)
+	}
+	if len(firstClaim) != 1 {
+		t.Fatalf("expected one initially claimed cleanup job, got %d", len(firstClaim))
+	}
+	if firstClaim[0].ID != seededJobs[0].ID {
+		t.Fatalf("expected initially claimed cleanup job id %d, got %d", seededJobs[0].ID, firstClaim[0].ID)
+	}
+	if firstClaim[0].Status != "running" {
+		t.Fatalf("expected initially claimed cleanup job status running, got %q", firstClaim[0].Status)
+	}
+	if firstClaim[0].AttemptCount != 1 {
+		t.Fatalf("expected initially claimed cleanup job attempt_count 1, got %d", firstClaim[0].AttemptCount)
+	}
+
+	rescheduledAt := now.Add(-time.Minute)
+	if err := store.MarkWorkspaceCleanupJobFailed(context.Background(), seededJobs[0].ID, rescheduledAt, "transient runner timeout"); err != nil {
 		t.Fatalf("mark cleanup failure: %v", err)
+	}
+
+	failedJobs, err := store.ListWorkspaceCleanupJobsForSession(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("list failed cleanup jobs: %v", err)
+	}
+	if len(failedJobs) != 1 {
+		t.Fatalf("expected one failed cleanup job, got %d", len(failedJobs))
+	}
+	if failedJobs[0].Status != "failed" {
+		t.Fatalf("expected failed cleanup job status failed, got %q", failedJobs[0].Status)
+	}
+	if failedJobs[0].AttemptCount != 1 {
+		t.Fatalf("expected failed cleanup job attempt_count 1, got %d", failedJobs[0].AttemptCount)
+	}
+	if !failedJobs[0].ScheduledAt.Equal(rescheduledAt) {
+		t.Fatalf("expected failed cleanup job scheduled_at %v, got %v", rescheduledAt, failedJobs[0].ScheduledAt)
+	}
+	if failedJobs[0].LastError != "transient runner timeout" {
+		t.Fatalf("expected failed cleanup job last_error to round-trip, got %q", failedJobs[0].LastError)
 	}
 
 	claimedJobs, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), now, 10)
 	if err != nil {
-		t.Fatalf("claim due cleanup jobs: %v", err)
+		t.Fatalf("reclaim due cleanup jobs: %v", err)
 	}
 	if len(claimedJobs) != 1 {
 		t.Fatalf("expected one reclaimed cleanup job, got %d", len(claimedJobs))
@@ -223,6 +305,12 @@ func TestWorkspaceCleanupJobStoreReclaimsFailedDueJobs(t *testing.T) {
 	}
 	if claimedJobs[0].Status != "running" {
 		t.Fatalf("expected reclaimed cleanup job status running, got %q", claimedJobs[0].Status)
+	}
+	if claimedJobs[0].AttemptCount != 2 {
+		t.Fatalf("expected reclaimed cleanup job attempt_count 2, got %d", claimedJobs[0].AttemptCount)
+	}
+	if claimedJobs[0].LastError != "" {
+		t.Fatalf("expected reclaimed cleanup job last_error to be cleared, got %q", claimedJobs[0].LastError)
 	}
 }
 
