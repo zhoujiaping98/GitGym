@@ -944,8 +944,80 @@ func TestPracticeServiceRunWorkspaceCleanupDueJobsReturnsMarkSuccessError(t *tes
 	if len(store.markCleanupSucceededCalls) != 1 || store.markCleanupSucceededCalls[0] != 9 {
 		t.Fatalf("expected cleanup job 9 to be marked succeeded, got %v", store.markCleanupSucceededCalls)
 	}
+	if len(store.upsertCleanupJobCalls) != 1 {
+		t.Fatalf("expected one recovery cleanup job upsert, got %d", len(store.upsertCleanupJobCalls))
+	}
+	recovery := store.upsertCleanupJobCalls[0]
+	if recovery.PracticeSessionID != 61 {
+		t.Fatalf("expected recovery cleanup job for session 61, got %d", recovery.PracticeSessionID)
+	}
+	if recovery.WorkspaceID != "ws-cleanup-mark-success" {
+		t.Fatalf("expected recovery cleanup workspace ws-cleanup-mark-success, got %q", recovery.WorkspaceID)
+	}
+	if recovery.Reason != service.PracticeSessionStatusExpired {
+		t.Fatalf("expected recovery cleanup reason %q, got %q", service.PracticeSessionStatusExpired, recovery.Reason)
+	}
+	if recovery.Status != "pending" {
+		t.Fatalf("expected recovery cleanup status pending, got %q", recovery.Status)
+	}
+	if !recovery.ScheduledAt.Equal(now) {
+		t.Fatalf("expected immediate recovery scheduling at %v, got %v", now, recovery.ScheduledAt)
+	}
 	if !strings.Contains(err.Error(), "mark cleanup job 9 succeeded") {
 		t.Fatalf("expected mark success context in error, got %v", err)
+	}
+}
+
+func TestPracticeServiceRunWorkspaceCleanupDueJobsProcessesInMemoryCleanupJobs(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 25, 9, 0, 0, 0, time.UTC)
+	store := service.NewInMemoryPracticeSessionStore()
+	runnerClient := &stubRunnerClient{
+		workspace: runner.Workspace{
+			ID:       "ws-in-memory-cleanup",
+			Path:     "/tmp/ws-in-memory-cleanup",
+			Template: "standard",
+		},
+	}
+	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
+
+	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 1,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	now = now.Add(3 * time.Hour)
+	expiredCount, err := svc.ExpireStalePracticeSessions(context.Background())
+	if err != nil {
+		t.Fatalf("expire stale practice sessions: %v", err)
+	}
+	if expiredCount != 1 {
+		t.Fatalf("expected one expired session, got %d", expiredCount)
+	}
+
+	if err := svc.RunWorkspaceCleanupDueJobs(context.Background(), 10); err != nil {
+		t.Fatalf("run workspace cleanup jobs: %v", err)
+	}
+	if runnerClient.deleteWorkspaceCalls != 1 {
+		t.Fatalf("expected one delete workspace call, got %d", runnerClient.deleteWorkspaceCalls)
+	}
+	if runnerClient.lastDeleteWorkspaceID != created.RunnerRef {
+		t.Fatalf("expected delete workspace id %q, got %q", created.RunnerRef, runnerClient.lastDeleteWorkspaceID)
+	}
+	if runnerClient.lastDeleteReason != service.PracticeSessionStatusExpired {
+		t.Fatalf("expected delete reason %q, got %q", service.PracticeSessionStatusExpired, runnerClient.lastDeleteReason)
+	}
+
+	if err := svc.RunWorkspaceCleanupDueJobs(context.Background(), 10); err != nil {
+		t.Fatalf("rerun workspace cleanup jobs: %v", err)
+	}
+	if runnerClient.deleteWorkspaceCalls != 1 {
+		t.Fatalf("expected cleanup job to be consumed once, got %d deletes", runnerClient.deleteWorkspaceCalls)
 	}
 }
 

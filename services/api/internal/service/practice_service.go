@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 const (
 	practiceSessionTTL                = 2 * time.Hour
 	practiceSessionOrphanCleanupGrace = 10 * time.Minute
+	workspaceCleanupWriteTimeout      = 5 * time.Second
 )
 
 const (
@@ -374,20 +376,86 @@ func (s *practiceService) RunWorkspaceCleanupDueJobs(ctx context.Context, limit 
 	for _, job := range jobs {
 		err := s.runner.DeleteWorkspace(ctx, job.WorkspaceID, job.Reason, 0)
 		if err == nil || errors.Is(err, runner.ErrWorkspaceNotFound) {
-			if markErr := s.store.MarkWorkspaceCleanupJobSucceeded(ctx, job.ID); markErr != nil {
-				runErrs = append(runErrs, fmt.Errorf("mark cleanup job %d succeeded: %w", job.ID, markErr))
+			if markErr := s.markWorkspaceCleanupJobSucceeded(ctx, job, now); markErr != nil {
+				runErrs = append(runErrs, markErr)
 			}
 			continue
 		}
 
 		runErrs = append(runErrs, fmt.Errorf("delete workspace for cleanup job %d: %w", job.ID, err))
 		nextRun := nextWorkspaceCleanupRetryAt(s.now().UTC(), job.AttemptCount)
-		if markErr := s.store.MarkWorkspaceCleanupJobFailed(ctx, job.ID, nextRun, err.Error()); markErr != nil {
-			runErrs = append(runErrs, fmt.Errorf("mark cleanup job %d failed: %w", job.ID, markErr))
+		if markErr := s.markWorkspaceCleanupJobFailed(ctx, job, nextRun, err.Error()); markErr != nil {
+			runErrs = append(runErrs, markErr)
 		}
 	}
 
 	return errors.Join(runErrs...)
+}
+
+func (s *practiceService) markWorkspaceCleanupJobSucceeded(
+	ctx context.Context,
+	job domain.WorkspaceCleanupJob,
+	recoveryAt time.Time,
+) error {
+	writeCtx, cancel := workspaceCleanupWriteContext(ctx)
+	defer cancel()
+
+	if err := s.store.MarkWorkspaceCleanupJobSucceeded(writeCtx, job.ID); err != nil {
+		return s.recoverClaimedWorkspaceCleanupJob(ctx, job, recoveryAt, fmt.Errorf("mark cleanup job %d succeeded: %w", job.ID, err))
+	}
+
+	return nil
+}
+
+func (s *practiceService) markWorkspaceCleanupJobFailed(
+	ctx context.Context,
+	job domain.WorkspaceCleanupJob,
+	scheduledAt time.Time,
+	lastErr string,
+) error {
+	writeCtx, cancel := workspaceCleanupWriteContext(ctx)
+	defer cancel()
+
+	if err := s.store.MarkWorkspaceCleanupJobFailed(writeCtx, job.ID, scheduledAt, lastErr); err != nil {
+		return s.recoverClaimedWorkspaceCleanupJob(ctx, job, scheduledAt, fmt.Errorf("mark cleanup job %d failed: %w", job.ID, err))
+	}
+
+	return nil
+}
+
+func (s *practiceService) recoverClaimedWorkspaceCleanupJob(
+	ctx context.Context,
+	job domain.WorkspaceCleanupJob,
+	scheduledAt time.Time,
+	cause error,
+) error {
+	writeCtx, cancel := workspaceCleanupWriteContext(ctx)
+	defer cancel()
+
+	recoveryJob := domain.WorkspaceCleanupJob{
+		PracticeSessionID: job.PracticeSessionID,
+		WorkspaceID:       job.WorkspaceID,
+		Reason:            job.Reason,
+		ScheduledAt:       scheduledAt.UTC(),
+		Status:            "pending",
+	}
+
+	if err := s.store.UpsertWorkspaceCleanupJob(writeCtx, recoveryJob); err != nil {
+		return errors.Join(
+			cause,
+			fmt.Errorf("recover cleanup job %d with re-enqueue: %w", job.ID, err),
+		)
+	}
+
+	return cause
+}
+
+func workspaceCleanupWriteContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), workspaceCleanupWriteTimeout)
+	}
+
+	return context.WithTimeout(context.WithoutCancel(ctx), workspaceCleanupWriteTimeout)
 }
 
 func (s *practiceService) ensureSessionAvailable(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error) {
@@ -473,17 +541,23 @@ func nextWorkspaceCleanupRetryAt(now time.Time, attempt uint32) time.Time {
 }
 
 type InMemoryPracticeSessionStore struct {
-	mu            sync.Mutex
-	nextID        uint64
-	sessions      map[uint64]domain.PracticeSession
-	currentByUser map[uint64]uint64
+	mu                  sync.Mutex
+	nextID              uint64
+	nextCleanupJobID    uint64
+	sessions            map[uint64]domain.PracticeSession
+	currentByUser       map[uint64]uint64
+	cleanupJobs         map[uint64]domain.WorkspaceCleanupJob
+	cleanupJobBySession map[uint64]uint64
 }
 
 func NewInMemoryPracticeSessionStore() *InMemoryPracticeSessionStore {
 	return &InMemoryPracticeSessionStore{
-		nextID:        1,
-		sessions:      make(map[uint64]domain.PracticeSession),
-		currentByUser: make(map[uint64]uint64),
+		nextID:              1,
+		nextCleanupJobID:    1,
+		sessions:            make(map[uint64]domain.PracticeSession),
+		currentByUser:       make(map[uint64]uint64),
+		cleanupJobs:         make(map[uint64]domain.WorkspaceCleanupJob),
+		cleanupJobBySession: make(map[uint64]uint64),
 	}
 }
 
@@ -563,18 +637,105 @@ func (s *InMemoryPracticeSessionStore) ExpirePracticeSessions(_ context.Context,
 	return expired, nil
 }
 
-func (s *InMemoryPracticeSessionStore) UpsertWorkspaceCleanupJob(_ context.Context, _ domain.WorkspaceCleanupJob) error {
+func (s *InMemoryPracticeSessionStore) UpsertWorkspaceCleanupJob(_ context.Context, job domain.WorkspaceCleanupJob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC()
+	if existingID, ok := s.cleanupJobBySession[job.PracticeSessionID]; ok {
+		existing := s.cleanupJobs[existingID]
+		existing.WorkspaceID = job.WorkspaceID
+		existing.Reason = job.Reason
+		existing.ScheduledAt = job.ScheduledAt.UTC()
+		existing.Status = job.Status
+		existing.LastError = ""
+		existing.UpdatedAt = now
+		s.cleanupJobs[existingID] = existing
+		return nil
+	}
+
+	job.ID = s.nextCleanupJobID
+	s.nextCleanupJobID++
+	job.ScheduledAt = job.ScheduledAt.UTC()
+	job.CreatedAt = now
+	job.UpdatedAt = now
+	s.cleanupJobs[job.ID] = job
+	s.cleanupJobBySession[job.PracticeSessionID] = job.ID
 	return nil
 }
 
-func (s *InMemoryPracticeSessionStore) ClaimDueWorkspaceCleanupJobs(_ context.Context, _ time.Time, _ int) ([]domain.WorkspaceCleanupJob, error) {
-	return nil, nil
+func (s *InMemoryPracticeSessionStore) ClaimDueWorkspaceCleanupJobs(_ context.Context, now time.Time, limit int) ([]domain.WorkspaceCleanupJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if limit <= 0 {
+		return []domain.WorkspaceCleanupJob{}, nil
+	}
+
+	dueJobs := make([]domain.WorkspaceCleanupJob, 0, len(s.cleanupJobs))
+	for _, job := range s.cleanupJobs {
+		if job.Status != "pending" && job.Status != "failed" {
+			continue
+		}
+		if job.ScheduledAt.After(now) {
+			continue
+		}
+		dueJobs = append(dueJobs, job)
+	}
+
+	sort.Slice(dueJobs, func(i, j int) bool {
+		if dueJobs[i].ScheduledAt.Equal(dueJobs[j].ScheduledAt) {
+			return dueJobs[i].ID < dueJobs[j].ID
+		}
+		return dueJobs[i].ScheduledAt.Before(dueJobs[j].ScheduledAt)
+	})
+	if len(dueJobs) > limit {
+		dueJobs = dueJobs[:limit]
+	}
+
+	claimedAt := now.UTC()
+	for i := range dueJobs {
+		job := dueJobs[i]
+		job.Status = "running"
+		job.AttemptCount++
+		job.LastError = ""
+		job.UpdatedAt = claimedAt
+		s.cleanupJobs[job.ID] = job
+		dueJobs[i] = job
+	}
+
+	return dueJobs, nil
 }
 
-func (s *InMemoryPracticeSessionStore) MarkWorkspaceCleanupJobSucceeded(_ context.Context, _ uint64) error {
+func (s *InMemoryPracticeSessionStore) MarkWorkspaceCleanupJobSucceeded(_ context.Context, jobID uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, ok := s.cleanupJobs[jobID]
+	if !ok {
+		return fmt.Errorf("workspace cleanup job not found")
+	}
+
+	job.Status = "succeeded"
+	job.LastError = ""
+	job.UpdatedAt = time.Now().UTC()
+	s.cleanupJobs[jobID] = job
 	return nil
 }
 
-func (s *InMemoryPracticeSessionStore) MarkWorkspaceCleanupJobFailed(_ context.Context, _ uint64, _ time.Time, _ string) error {
+func (s *InMemoryPracticeSessionStore) MarkWorkspaceCleanupJobFailed(_ context.Context, jobID uint64, scheduledAt time.Time, lastErr string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, ok := s.cleanupJobs[jobID]
+	if !ok {
+		return fmt.Errorf("workspace cleanup job not found")
+	}
+
+	job.Status = "failed"
+	job.ScheduledAt = scheduledAt.UTC()
+	job.LastError = lastErr
+	job.UpdatedAt = time.Now().UTC()
+	s.cleanupJobs[jobID] = job
 	return nil
 }
