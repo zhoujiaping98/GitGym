@@ -120,7 +120,7 @@ func TestWorkspaceCleanupJobStoreClaimsDueJobsAndMarksSuccess(t *testing.T) {
 	}
 }
 
-func TestWorkspaceCleanupJobStoreDoesNotReclaimRunning(t *testing.T) {
+func TestWorkspaceCleanupJobStoreDoesNotReclaimRunningJobs(t *testing.T) {
 	t.Parallel()
 
 	store := newTestMySQLStore(t)
