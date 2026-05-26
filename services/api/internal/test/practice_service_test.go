@@ -859,6 +859,41 @@ func TestPracticeServiceRunWorkspaceCleanupDueJobsMarksSuccess(t *testing.T) {
 	}
 }
 
+func TestPracticeServiceRunWorkspaceCleanupDueJobsTreatsWorkspaceNotFoundAsSuccess(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 24, 17, 30, 0, 0, time.UTC)
+	store := &stubPracticeSessionStore{
+		claimedCleanupJobs: []domain.WorkspaceCleanupJob{
+			{
+				ID:                10,
+				PracticeSessionID: 62,
+				WorkspaceID:       "ws-cleanup-missing",
+				Reason:            service.PracticeSessionStatusExpired,
+				ScheduledAt:       now.Add(-time.Minute),
+				Status:            "running",
+			},
+		},
+	}
+	runnerClient := &stubRunnerClient{
+		deleteErr: runner.ErrWorkspaceNotFound,
+	}
+	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
+
+	if err := svc.RunWorkspaceCleanupDueJobs(context.Background(), 10); err != nil {
+		t.Fatalf("run workspace cleanup jobs: %v", err)
+	}
+	if runnerClient.deleteWorkspaceCalls != 1 {
+		t.Fatalf("expected one delete workspace call, got %d", runnerClient.deleteWorkspaceCalls)
+	}
+	if len(store.markCleanupSucceededCalls) != 1 || store.markCleanupSucceededCalls[0] != 10 {
+		t.Fatalf("expected cleanup job 10 to be marked succeeded, got %v", store.markCleanupSucceededCalls)
+	}
+	if len(store.markCleanupFailedCalls) != 0 {
+		t.Fatalf("expected no failed cleanup marks, got %d", len(store.markCleanupFailedCalls))
+	}
+}
+
 func TestPracticeServiceRunWorkspaceCleanupDueJobsReschedulesFailure(t *testing.T) {
 	t.Parallel()
 
