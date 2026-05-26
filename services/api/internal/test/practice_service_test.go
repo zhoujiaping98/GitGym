@@ -872,7 +872,7 @@ func TestPracticeServiceRunWorkspaceCleanupDueJobsReschedulesFailure(t *testing.
 				Reason:            service.PracticeSessionStatusOrphaned,
 				ScheduledAt:       now.Add(-time.Minute),
 				Status:            "running",
-				AttemptCount:      0,
+				AttemptCount:      1,
 			},
 		},
 	}
@@ -881,8 +881,10 @@ func TestPracticeServiceRunWorkspaceCleanupDueJobsReschedulesFailure(t *testing.
 	}
 	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
 
-	if err := svc.RunWorkspaceCleanupDueJobs(context.Background(), 10); err != nil {
-		t.Fatalf("run workspace cleanup jobs: %v", err)
+	err := svc.RunWorkspaceCleanupDueJobs(context.Background(), 10)
+
+	if err == nil {
+		t.Fatal("expected runner delete failure to be returned")
 	}
 	if runnerClient.deleteWorkspaceCalls != 1 {
 		t.Fatalf("expected one delete workspace call, got %d", runnerClient.deleteWorkspaceCalls)
@@ -905,6 +907,9 @@ func TestPracticeServiceRunWorkspaceCleanupDueJobsReschedulesFailure(t *testing.
 	}
 	if !failure.scheduledAt.Equal(now.Add(time.Minute)) {
 		t.Fatalf("expected first retry at %v, got %v", now.Add(time.Minute), failure.scheduledAt)
+	}
+	if !strings.Contains(err.Error(), "runner unavailable") {
+		t.Fatalf("expected runner delete failure in error, got %v", err)
 	}
 }
 

@@ -370,23 +370,24 @@ func (s *practiceService) RunWorkspaceCleanupDueJobs(ctx context.Context, limit 
 		return fmt.Errorf("claim due cleanup jobs: %w", err)
 	}
 
-	var markErrs []error
+	var runErrs []error
 	for _, job := range jobs {
 		err := s.runner.DeleteWorkspace(ctx, job.WorkspaceID, job.Reason, 0)
 		if err == nil || errors.Is(err, runner.ErrWorkspaceNotFound) {
 			if markErr := s.store.MarkWorkspaceCleanupJobSucceeded(ctx, job.ID); markErr != nil {
-				markErrs = append(markErrs, fmt.Errorf("mark cleanup job %d succeeded: %w", job.ID, markErr))
+				runErrs = append(runErrs, fmt.Errorf("mark cleanup job %d succeeded: %w", job.ID, markErr))
 			}
 			continue
 		}
 
-		nextRun := nextWorkspaceCleanupRetryAt(s.now().UTC(), job.AttemptCount+1)
+		runErrs = append(runErrs, fmt.Errorf("delete workspace for cleanup job %d: %w", job.ID, err))
+		nextRun := nextWorkspaceCleanupRetryAt(s.now().UTC(), job.AttemptCount)
 		if markErr := s.store.MarkWorkspaceCleanupJobFailed(ctx, job.ID, nextRun, err.Error()); markErr != nil {
-			markErrs = append(markErrs, fmt.Errorf("mark cleanup job %d failed: %w", job.ID, markErr))
+			runErrs = append(runErrs, fmt.Errorf("mark cleanup job %d failed: %w", job.ID, markErr))
 		}
 	}
 
-	return errors.Join(markErrs...)
+	return errors.Join(runErrs...)
 }
 
 func (s *practiceService) ensureSessionAvailable(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error) {
