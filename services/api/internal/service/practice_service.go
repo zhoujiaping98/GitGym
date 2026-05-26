@@ -63,6 +63,9 @@ type PracticeSessionStore interface {
 	UpdatePracticeSession(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error)
 	ExpirePracticeSessions(ctx context.Context, before time.Time, endedAt time.Time) ([]domain.PracticeSession, error)
 	UpsertWorkspaceCleanupJob(ctx context.Context, job domain.WorkspaceCleanupJob) error
+	ClaimDueWorkspaceCleanupJobs(ctx context.Context, now time.Time, limit int) ([]domain.WorkspaceCleanupJob, error)
+	MarkWorkspaceCleanupJobSucceeded(ctx context.Context, jobID uint64) error
+	MarkWorkspaceCleanupJobFailed(ctx context.Context, jobID uint64, scheduledAt time.Time, lastErr string) error
 }
 
 type PracticeService interface {
@@ -352,6 +355,38 @@ func (s *practiceService) ExpireStalePracticeSessions(ctx context.Context) (int,
 	return len(expiredSessions), nil
 }
 
+func (s *practiceService) RunWorkspaceCleanupDueJobs(ctx context.Context, limit int) error {
+	if s.store == nil || s.runner == nil {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	now := s.now().UTC()
+	jobs, err := s.store.ClaimDueWorkspaceCleanupJobs(ctx, now, limit)
+	if err != nil {
+		return fmt.Errorf("claim due cleanup jobs: %w", err)
+	}
+
+	for _, job := range jobs {
+		err := s.runner.DeleteWorkspace(ctx, job.WorkspaceID, job.Reason, 0)
+		if err == nil || errors.Is(err, runner.ErrWorkspaceNotFound) {
+			if markErr := s.store.MarkWorkspaceCleanupJobSucceeded(ctx, job.ID); markErr != nil {
+				log.Printf("mark cleanup job %d succeeded: %v", job.ID, markErr)
+			}
+			continue
+		}
+
+		nextRun := nextWorkspaceCleanupRetryAt(s.now().UTC(), job.AttemptCount+1)
+		if markErr := s.store.MarkWorkspaceCleanupJobFailed(ctx, job.ID, nextRun, err.Error()); markErr != nil {
+			log.Printf("mark cleanup job %d failed: %v", job.ID, markErr)
+		}
+	}
+
+	return nil
+}
+
 func (s *practiceService) ensureSessionAvailable(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error) {
 	switch session.Status {
 	case PracticeSessionStatusExpired:
@@ -420,6 +455,17 @@ func (s *practiceService) upsertWorkspaceCleanupJob(
 	}
 	if err := s.store.UpsertWorkspaceCleanupJob(ctx, job); err != nil {
 		log.Printf("practice cleanup job upsert failed for session %d: %v", session.ID, err)
+	}
+}
+
+func nextWorkspaceCleanupRetryAt(now time.Time, attempt uint32) time.Time {
+	switch attempt {
+	case 1:
+		return now.Add(time.Minute)
+	case 2:
+		return now.Add(5 * time.Minute)
+	default:
+		return now.Add(15 * time.Minute)
 	}
 }
 
@@ -515,5 +561,17 @@ func (s *InMemoryPracticeSessionStore) ExpirePracticeSessions(_ context.Context,
 }
 
 func (s *InMemoryPracticeSessionStore) UpsertWorkspaceCleanupJob(_ context.Context, _ domain.WorkspaceCleanupJob) error {
+	return nil
+}
+
+func (s *InMemoryPracticeSessionStore) ClaimDueWorkspaceCleanupJobs(_ context.Context, _ time.Time, _ int) ([]domain.WorkspaceCleanupJob, error) {
+	return nil, nil
+}
+
+func (s *InMemoryPracticeSessionStore) MarkWorkspaceCleanupJobSucceeded(_ context.Context, _ uint64) error {
+	return nil
+}
+
+func (s *InMemoryPracticeSessionStore) MarkWorkspaceCleanupJobFailed(_ context.Context, _ uint64, _ time.Time, _ string) error {
 	return nil
 }
