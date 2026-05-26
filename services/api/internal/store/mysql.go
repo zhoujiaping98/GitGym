@@ -151,7 +151,10 @@ SELECT
   created_at,
   updated_at
 FROM workspace_cleanup_jobs
-WHERE status IN (?, ?) AND scheduled_at <= ?
+WHERE (
+  (status IN (?, ?) AND scheduled_at <= ?)
+  OR (status = ? AND updated_at <= ?)
+)
 ORDER BY scheduled_at ASC, id ASC
 LIMIT ?
 FOR UPDATE
@@ -445,7 +448,8 @@ func (s *MySQLStore) ClaimDueWorkspaceCleanupJobs(ctx context.Context, now time.
 		_ = tx.Rollback()
 	}()
 
-	rows, err := tx.QueryContext(ctx, claimDueWorkspaceCleanupJobsQuery, "pending", "failed", now, limit)
+	staleRunningBefore := now.UTC().Add(-service.WorkspaceCleanupJobLeaseTimeout)
+	rows, err := tx.QueryContext(ctx, claimDueWorkspaceCleanupJobsQuery, "pending", "failed", now, "running", staleRunningBefore, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query due workspace cleanup jobs: %w", err)
 	}
@@ -474,8 +478,10 @@ func (s *MySQLStore) ClaimDueWorkspaceCleanupJobs(ctx context.Context, now time.
 		return []domain.WorkspaceCleanupJob{}, nil
 	}
 
-	args := make([]any, 0, len(jobs)+2)
+	claimedAt := now.UTC()
+	args := make([]any, 0, len(jobs)+3)
 	args = append(args, "running")
+	args = append(args, claimedAt)
 	placeholders := make([]string, 0, len(jobs))
 	for _, job := range jobs {
 		placeholders = append(placeholders, "?")
@@ -483,7 +489,7 @@ func (s *MySQLStore) ClaimDueWorkspaceCleanupJobs(ctx context.Context, now time.
 	}
 	updateQuery := fmt.Sprintf(`
 UPDATE workspace_cleanup_jobs
-SET status = ?, attempt_count = attempt_count + 1, last_error = NULL, updated_at = CURRENT_TIMESTAMP(6)
+SET status = ?, attempt_count = attempt_count + 1, last_error = NULL, updated_at = ?
 WHERE id IN (%s)
 `, strings.Join(placeholders, ", "))
 	if _, err := tx.ExecContext(ctx, updateQuery, args...); err != nil {
@@ -498,6 +504,7 @@ WHERE id IN (%s)
 		jobs[i].Status = "running"
 		jobs[i].AttemptCount++
 		jobs[i].LastError = ""
+		jobs[i].UpdatedAt = claimedAt
 	}
 
 	return jobs, nil
