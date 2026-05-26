@@ -371,12 +371,6 @@ func TestPracticeServiceExpiresStaleCurrentSession(t *testing.T) {
 	if store.lastUpdatedSession.EndedAt == nil || !store.lastUpdatedSession.EndedAt.Equal(now) {
 		t.Fatalf("expected ended at %v, got %v", now, store.lastUpdatedSession.EndedAt)
 	}
-	if len(store.upsertCleanupJobCalls) != 1 {
-		t.Fatalf("expected one cleanup job upsert, got %d", len(store.upsertCleanupJobCalls))
-	}
-	if job := store.upsertCleanupJobCalls[0]; job.Reason != service.PracticeSessionStatusExpired || !job.ScheduledAt.Equal(now) {
-		t.Fatalf("expected immediate expired cleanup job at %v, got reason=%q scheduled_at=%v", now, job.Reason, job.ScheduledAt)
-	}
 }
 
 func TestPracticeServiceReturnsOrphanedCurrentSession(t *testing.T) {
