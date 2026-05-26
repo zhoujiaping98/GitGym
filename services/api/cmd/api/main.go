@@ -70,6 +70,7 @@ func main() {
 
 	if practice != nil {
 		go service.StartPracticeSessionExpiryLoop(ctx, practice, time.Minute, log.Default())
+		go service.StartWorkspaceCleanupLoop(ctx, practice, time.Minute, log.Default())
 	}
 
 	server := &http.Server{

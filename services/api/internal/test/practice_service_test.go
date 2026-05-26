@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -904,6 +905,42 @@ func TestPracticeServiceRunWorkspaceCleanupDueJobsReschedulesFailure(t *testing.
 	}
 	if !failure.scheduledAt.Equal(now.Add(time.Minute)) {
 		t.Fatalf("expected first retry at %v, got %v", now.Add(time.Minute), failure.scheduledAt)
+	}
+}
+
+func TestPracticeServiceRunWorkspaceCleanupDueJobsReturnsMarkSuccessError(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 24, 19, 0, 0, 0, time.UTC)
+	store := &stubPracticeSessionStore{
+		claimedCleanupJobs: []domain.WorkspaceCleanupJob{
+			{
+				ID:                9,
+				PracticeSessionID: 61,
+				WorkspaceID:       "ws-cleanup-mark-success",
+				Reason:            service.PracticeSessionStatusExpired,
+				ScheduledAt:       now.Add(-time.Minute),
+				Status:            "running",
+			},
+		},
+		markCleanupSucceededErr: errors.New("write failed"),
+	}
+	runnerClient := &stubRunnerClient{}
+	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
+
+	err := svc.RunWorkspaceCleanupDueJobs(context.Background(), 10)
+
+	if err == nil {
+		t.Fatal("expected mark success error")
+	}
+	if runnerClient.deleteWorkspaceCalls != 1 {
+		t.Fatalf("expected one delete workspace call, got %d", runnerClient.deleteWorkspaceCalls)
+	}
+	if len(store.markCleanupSucceededCalls) != 1 || store.markCleanupSucceededCalls[0] != 9 {
+		t.Fatalf("expected cleanup job 9 to be marked succeeded, got %v", store.markCleanupSucceededCalls)
+	}
+	if !strings.Contains(err.Error(), "mark cleanup job 9 succeeded") {
+		t.Fatalf("expected mark success context in error, got %v", err)
 	}
 }
 
