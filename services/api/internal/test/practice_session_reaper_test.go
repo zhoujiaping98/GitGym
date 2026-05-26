@@ -48,23 +48,16 @@ func TestStartPracticeSessionExpiryLoopSweepsImmediatelyAndOnInterval(t *testing
 	wg.Wait()
 }
 
-func TestStartPracticeSessionExpiryLoopAlsoRunsWorkspaceCleanupSweep(t *testing.T) {
+func TestStartWorkspaceCleanupLoopSweepsImmediatelyAndOnInterval(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	expirySweeps := make(chan struct{}, 2)
-	cleanupSweeps := make(chan struct{}, 2)
+	sweeps := make(chan struct{}, 4)
 	svc := &stubCleanupLoopPracticeService{
-		stubPracticeService: stubPracticeService{
-			expireStaleSessionsFunc: func(context.Context) (int, error) {
-				expirySweeps <- struct{}{}
-				return 1, nil
-			},
-		},
 		runWorkspaceCleanupDueJobsFunc: func(context.Context, int) error {
-			cleanupSweeps <- struct{}{}
+			sweeps <- struct{}{}
 			return nil
 		},
 	}
@@ -73,19 +66,19 @@ func TestStartPracticeSessionExpiryLoopAlsoRunsWorkspaceCleanupSweep(t *testing.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		service.StartPracticeSessionExpiryLoop(ctx, svc, 10*time.Millisecond, nil)
+		service.StartWorkspaceCleanupLoop(ctx, svc, 10*time.Millisecond, nil)
 	}()
 
 	select {
-	case <-expirySweeps:
+	case <-sweeps:
 	case <-time.After(time.Second):
-		t.Fatal("expected initial expiry sweep")
+		t.Fatal("expected initial workspace cleanup sweep")
 	}
 
 	select {
-	case <-cleanupSweeps:
+	case <-sweeps:
 	case <-time.After(time.Second):
-		t.Fatal("expected initial workspace cleanup sweep")
+		t.Fatal("expected interval workspace cleanup sweep")
 	}
 
 	cancel()
