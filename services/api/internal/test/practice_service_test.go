@@ -371,6 +371,12 @@ func TestPracticeServiceExpiresStaleCurrentSession(t *testing.T) {
 	if store.lastUpdatedSession.EndedAt == nil || !store.lastUpdatedSession.EndedAt.Equal(now) {
 		t.Fatalf("expected ended at %v, got %v", now, store.lastUpdatedSession.EndedAt)
 	}
+	if len(store.upsertCleanupJobCalls) != 1 {
+		t.Fatalf("expected one cleanup job upsert, got %d", len(store.upsertCleanupJobCalls))
+	}
+	if job := store.upsertCleanupJobCalls[0]; job.Reason != service.PracticeSessionStatusExpired || !job.ScheduledAt.Equal(now) {
+		t.Fatalf("expected immediate expired cleanup job at %v, got reason=%q scheduled_at=%v", now, job.Reason, job.ScheduledAt)
+	}
 }
 
 func TestPracticeServiceReturnsOrphanedCurrentSession(t *testing.T) {
@@ -807,6 +813,120 @@ func TestPracticeServiceExpireSweepUpsertsCleanupJob(t *testing.T) {
 	}
 }
 
+func TestPracticeServiceRunWorkspaceCleanupDueJobsMarksSuccess(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 24, 17, 0, 0, 0, time.UTC)
+	store := &stubPracticeSessionStore{
+		claimedCleanupJobs: []domain.WorkspaceCleanupJob{
+			{
+				ID:                7,
+				PracticeSessionID: 41,
+				WorkspaceID:       "ws-cleanup-run",
+				Reason:            service.PracticeSessionStatusExpired,
+				ScheduledAt:       now.Add(-time.Minute),
+				Status:            "running",
+			},
+		},
+	}
+	runnerClient := &stubRunnerClient{}
+	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
+
+	worker, ok := svc.(interface {
+		RunWorkspaceCleanupDueJobs(context.Context, int) error
+	})
+	if !ok {
+		t.Fatal("expected practice service to expose workspace cleanup worker")
+	}
+
+	if err := worker.RunWorkspaceCleanupDueJobs(context.Background(), 10); err != nil {
+		t.Fatalf("run workspace cleanup jobs: %v", err)
+	}
+	if store.claimCleanupJobsCalls != 1 {
+		t.Fatalf("expected one claim call, got %d", store.claimCleanupJobsCalls)
+	}
+	if !store.lastClaimCleanupNow.Equal(now) {
+		t.Fatalf("expected claim time %v, got %v", now, store.lastClaimCleanupNow)
+	}
+	if store.lastClaimCleanupLimit != 10 {
+		t.Fatalf("expected claim limit 10, got %d", store.lastClaimCleanupLimit)
+	}
+	if runnerClient.deleteWorkspaceCalls != 1 {
+		t.Fatalf("expected one delete workspace call, got %d", runnerClient.deleteWorkspaceCalls)
+	}
+	if runnerClient.lastDeleteWorkspaceID != "ws-cleanup-run" {
+		t.Fatalf("expected delete workspace id ws-cleanup-run, got %q", runnerClient.lastDeleteWorkspaceID)
+	}
+	if runnerClient.lastDeleteReason != service.PracticeSessionStatusExpired {
+		t.Fatalf("expected delete reason %q, got %q", service.PracticeSessionStatusExpired, runnerClient.lastDeleteReason)
+	}
+	if runnerClient.lastDeleteDelay != 0 {
+		t.Fatalf("expected worker delete delay 0, got %v", runnerClient.lastDeleteDelay)
+	}
+	if len(store.markCleanupSucceededCalls) != 1 || store.markCleanupSucceededCalls[0] != 7 {
+		t.Fatalf("expected cleanup job 7 to be marked succeeded, got %v", store.markCleanupSucceededCalls)
+	}
+	if len(store.markCleanupFailedCalls) != 0 {
+		t.Fatalf("expected no failed cleanup marks, got %d", len(store.markCleanupFailedCalls))
+	}
+}
+
+func TestPracticeServiceRunWorkspaceCleanupDueJobsReschedulesFailure(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 24, 18, 0, 0, 0, time.UTC)
+	store := &stubPracticeSessionStore{
+		claimedCleanupJobs: []domain.WorkspaceCleanupJob{
+			{
+				ID:                8,
+				PracticeSessionID: 52,
+				WorkspaceID:       "ws-cleanup-fail",
+				Reason:            service.PracticeSessionStatusOrphaned,
+				ScheduledAt:       now.Add(-time.Minute),
+				Status:            "running",
+				AttemptCount:      0,
+			},
+		},
+	}
+	runnerClient := &stubRunnerClient{
+		deleteErr: errors.New("runner unavailable"),
+	}
+	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
+
+	worker, ok := svc.(interface {
+		RunWorkspaceCleanupDueJobs(context.Context, int) error
+	})
+	if !ok {
+		t.Fatal("expected practice service to expose workspace cleanup worker")
+	}
+
+	if err := worker.RunWorkspaceCleanupDueJobs(context.Background(), 10); err != nil {
+		t.Fatalf("run workspace cleanup jobs: %v", err)
+	}
+	if runnerClient.deleteWorkspaceCalls != 1 {
+		t.Fatalf("expected one delete workspace call, got %d", runnerClient.deleteWorkspaceCalls)
+	}
+	if runnerClient.lastDeleteDelay != 0 {
+		t.Fatalf("expected worker delete delay 0, got %v", runnerClient.lastDeleteDelay)
+	}
+	if len(store.markCleanupSucceededCalls) != 0 {
+		t.Fatalf("expected no succeeded cleanup marks, got %v", store.markCleanupSucceededCalls)
+	}
+	if len(store.markCleanupFailedCalls) != 1 {
+		t.Fatalf("expected one failed cleanup mark, got %d", len(store.markCleanupFailedCalls))
+	}
+	failure := store.markCleanupFailedCalls[0]
+	if failure.jobID != 8 {
+		t.Fatalf("expected failed cleanup mark for job 8, got %d", failure.jobID)
+	}
+	if failure.lastError == "" {
+		t.Fatal("expected failed cleanup to record last error")
+	}
+	if !failure.scheduledAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("expected first retry at %v, got %v", now.Add(time.Minute), failure.scheduledAt)
+	}
+}
+
 func TestRunnerClientDeleteWorkspaceSendsCleanupRequest(t *testing.T) {
 	t.Parallel()
 
@@ -876,17 +996,26 @@ func TestRunnerClientDeleteWorkspaceMapsNotFound(t *testing.T) {
 }
 
 type stubPracticeSessionStore struct {
-	createCalls           int
-	updateCalls           int
-	expireCalls           int
-	lastSession           domain.PracticeSession
-	savedSession          domain.PracticeSession
-	lastUpdatedSession    domain.PracticeSession
-	lastExpireBefore      time.Time
-	expirableSessions     []domain.PracticeSession
-	expireResults         []domain.PracticeSession
-	upsertCleanupJobCalls []domain.WorkspaceCleanupJob
-	upsertCleanupJobErr   error
+	createCalls               int
+	updateCalls               int
+	expireCalls               int
+	claimCleanupJobsCalls     int
+	lastSession               domain.PracticeSession
+	savedSession              domain.PracticeSession
+	lastUpdatedSession        domain.PracticeSession
+	lastExpireBefore          time.Time
+	lastClaimCleanupNow       time.Time
+	lastClaimCleanupLimit     int
+	expirableSessions         []domain.PracticeSession
+	expireResults             []domain.PracticeSession
+	claimedCleanupJobs        []domain.WorkspaceCleanupJob
+	upsertCleanupJobCalls     []domain.WorkspaceCleanupJob
+	markCleanupSucceededCalls []uint64
+	markCleanupFailedCalls    []cleanupFailureMark
+	upsertCleanupJobErr       error
+	claimCleanupJobsErr       error
+	markCleanupSucceededErr   error
+	markCleanupFailedErr      error
 }
 
 func (s *stubPracticeSessionStore) CreatePracticeSession(_ context.Context, session domain.PracticeSession) (domain.PracticeSession, error) {
@@ -948,6 +1077,48 @@ func (s *stubPracticeSessionStore) UpsertWorkspaceCleanupJob(_ context.Context, 
 	s.upsertCleanupJobCalls = append(s.upsertCleanupJobCalls, job)
 
 	return nil
+}
+
+func (s *stubPracticeSessionStore) ClaimDueWorkspaceCleanupJobs(_ context.Context, now time.Time, limit int) ([]domain.WorkspaceCleanupJob, error) {
+	s.claimCleanupJobsCalls++
+	s.lastClaimCleanupNow = now
+	s.lastClaimCleanupLimit = limit
+	if s.claimCleanupJobsErr != nil {
+		return nil, s.claimCleanupJobsErr
+	}
+	return append([]domain.WorkspaceCleanupJob(nil), s.claimedCleanupJobs...), nil
+}
+
+func (s *stubPracticeSessionStore) MarkWorkspaceCleanupJobSucceeded(_ context.Context, jobID uint64) error {
+	s.markCleanupSucceededCalls = append(s.markCleanupSucceededCalls, jobID)
+	return s.markCleanupSucceededErr
+}
+
+func (s *stubPracticeSessionStore) MarkWorkspaceCleanupJobFailed(_ context.Context, jobID uint64, scheduledAt time.Time, lastErr string) error {
+	s.markCleanupFailedCalls = append(s.markCleanupFailedCalls, cleanupFailureMark{
+		jobID:       jobID,
+		scheduledAt: scheduledAt,
+		lastError:   lastErr,
+	})
+	return s.markCleanupFailedErr
+}
+
+type cleanupFailureMark struct {
+	jobID       uint64
+	scheduledAt time.Time
+	lastError   string
+}
+
+func (s *persistentStubStore) ClaimDueWorkspaceCleanupJobs(ctx context.Context, now time.Time, limit int) ([]domain.WorkspaceCleanupJob, error) {
+	return s.practiceSessions.ClaimDueWorkspaceCleanupJobs(ctx, now, limit)
+}
+
+func (s *persistentStubStore) MarkWorkspaceCleanupJobSucceeded(ctx context.Context, jobID uint64) error {
+	return s.practiceSessions.MarkWorkspaceCleanupJobSucceeded(ctx, jobID)
+}
+
+func (s *persistentStubStore) MarkWorkspaceCleanupJobFailed(ctx context.Context, jobID uint64, scheduledAt time.Time, lastErr string) error {
+	return s.practiceSessions.MarkWorkspaceCleanupJobFailed(ctx, jobID, scheduledAt, lastErr)
 }
 
 type stubRunnerClient struct {

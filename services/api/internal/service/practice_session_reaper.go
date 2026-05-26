@@ -7,6 +7,11 @@ import (
 )
 
 const defaultPracticeSessionExpiryInterval = time.Minute
+const defaultWorkspaceCleanupSweepLimit = 20
+
+type workspaceCleanupDueJobRunner interface {
+	RunWorkspaceCleanupDueJobs(ctx context.Context, limit int) error
+}
 
 func StartPracticeSessionExpiryLoop(ctx context.Context, practiceService PracticeService, interval time.Duration, logger *log.Logger) {
 	if practiceService == nil {
@@ -19,6 +24,11 @@ func StartPracticeSessionExpiryLoop(ctx context.Context, practiceService Practic
 	runSweep := func() {
 		if _, err := practiceService.ExpireStalePracticeSessions(ctx); err != nil && logger != nil {
 			logger.Printf("practice session expiry sweep failed: %v", err)
+		}
+		if cleanupRunner, ok := practiceService.(workspaceCleanupDueJobRunner); ok {
+			if err := cleanupRunner.RunWorkspaceCleanupDueJobs(ctx, defaultWorkspaceCleanupSweepLimit); err != nil && logger != nil {
+				logger.Printf("workspace cleanup sweep failed: %v", err)
+			}
 		}
 	}
 
