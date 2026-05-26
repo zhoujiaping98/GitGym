@@ -80,6 +80,7 @@ type PracticeService interface {
 	PracticeSessionRepoState(ctx context.Context, userID uint64, sessionID uint64) (runner.RepoState, error)
 	ConnectTerminal(ctx context.Context, userID uint64, sessionID uint64) (runner.TerminalConnection, error)
 	ExpireStalePracticeSessions(ctx context.Context) (int, error)
+	RunWorkspaceCleanupDueJobs(ctx context.Context, limit int) error
 }
 
 type practiceService struct {

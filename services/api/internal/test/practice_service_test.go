@@ -826,14 +826,7 @@ func TestPracticeServiceRunWorkspaceCleanupDueJobsMarksSuccess(t *testing.T) {
 	runnerClient := &stubRunnerClient{}
 	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
 
-	worker, ok := svc.(interface {
-		RunWorkspaceCleanupDueJobs(context.Context, int) error
-	})
-	if !ok {
-		t.Fatal("expected practice service to expose workspace cleanup worker")
-	}
-
-	if err := worker.RunWorkspaceCleanupDueJobs(context.Background(), 10); err != nil {
+	if err := svc.RunWorkspaceCleanupDueJobs(context.Background(), 10); err != nil {
 		t.Fatalf("run workspace cleanup jobs: %v", err)
 	}
 	if store.claimCleanupJobsCalls != 1 {
@@ -887,14 +880,7 @@ func TestPracticeServiceRunWorkspaceCleanupDueJobsReschedulesFailure(t *testing.
 	}
 	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
 
-	worker, ok := svc.(interface {
-		RunWorkspaceCleanupDueJobs(context.Context, int) error
-	})
-	if !ok {
-		t.Fatal("expected practice service to expose workspace cleanup worker")
-	}
-
-	if err := worker.RunWorkspaceCleanupDueJobs(context.Background(), 10); err != nil {
+	if err := svc.RunWorkspaceCleanupDueJobs(context.Background(), 10); err != nil {
 		t.Fatalf("run workspace cleanup jobs: %v", err)
 	}
 	if runnerClient.deleteWorkspaceCalls != 1 {
@@ -1113,6 +1099,10 @@ func (s *persistentStubStore) MarkWorkspaceCleanupJobSucceeded(ctx context.Conte
 
 func (s *persistentStubStore) MarkWorkspaceCleanupJobFailed(ctx context.Context, jobID uint64, scheduledAt time.Time, lastErr string) error {
 	return s.practiceSessions.MarkWorkspaceCleanupJobFailed(ctx, jobID, scheduledAt, lastErr)
+}
+
+func (s *stubPracticeService) RunWorkspaceCleanupDueJobs(context.Context, int) error {
+	return nil
 }
 
 type stubRunnerClient struct {
