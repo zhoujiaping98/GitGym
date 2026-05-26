@@ -17,6 +17,7 @@ const (
 	practiceSessionTTL                = 2 * time.Hour
 	practiceSessionOrphanCleanupGrace = 10 * time.Minute
 	workspaceCleanupWriteTimeout      = 5 * time.Second
+	WorkspaceCleanupJobLeaseTimeout   = 15 * time.Minute
 )
 
 const (
@@ -526,6 +527,30 @@ func (s *practiceService) upsertWorkspaceCleanupJob(
 	}
 	if err := s.store.UpsertWorkspaceCleanupJob(ctx, job); err != nil {
 		log.Printf("practice cleanup job upsert failed for session %d: %v", session.ID, err)
+		s.fallbackWorkspaceCleanup(ctx, session, reason, scheduledAt)
+	}
+}
+
+func (s *practiceService) fallbackWorkspaceCleanup(
+	ctx context.Context,
+	session domain.PracticeSession,
+	reason string,
+	scheduledAt time.Time,
+) {
+	if s.runner == nil || session.RunnerRef == "" {
+		return
+	}
+
+	deleteAfter := scheduledAt.UTC().Sub(s.now().UTC())
+	if deleteAfter < 0 {
+		deleteAfter = 0
+	}
+
+	writeCtx, cancel := workspaceCleanupWriteContext(ctx)
+	defer cancel()
+
+	if err := s.runner.DeleteWorkspace(writeCtx, session.RunnerRef, reason, deleteAfter); err != nil && !errors.Is(err, runner.ErrWorkspaceNotFound) {
+		log.Printf("practice cleanup fallback delete failed for session %d: %v", session.ID, err)
 	}
 }
 
@@ -673,11 +698,18 @@ func (s *InMemoryPracticeSessionStore) ClaimDueWorkspaceCleanupJobs(_ context.Co
 	}
 
 	dueJobs := make([]domain.WorkspaceCleanupJob, 0, len(s.cleanupJobs))
+	staleRunningBefore := now.UTC().Add(-WorkspaceCleanupJobLeaseTimeout)
 	for _, job := range s.cleanupJobs {
-		if job.Status != "pending" && job.Status != "failed" {
-			continue
-		}
-		if job.ScheduledAt.After(now) {
+		switch job.Status {
+		case "pending", "failed":
+			if job.ScheduledAt.After(now) {
+				continue
+			}
+		case "running":
+			if job.UpdatedAt.After(staleRunningBefore) {
+				continue
+			}
+		default:
 			continue
 		}
 		dueJobs = append(dueJobs, job)

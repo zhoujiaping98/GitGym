@@ -120,7 +120,7 @@ func TestWorkspaceCleanupJobStoreClaimsDueJobsAndMarksSuccess(t *testing.T) {
 	}
 }
 
-func TestWorkspaceCleanupJobStoreDoesNotReclaimRunning(t *testing.T) {
+func TestWorkspaceCleanupJobStoreDoesNotReclaimRunningJobs(t *testing.T) {
 	t.Parallel()
 
 	store := newTestMySQLStore(t)
@@ -161,6 +161,60 @@ func TestWorkspaceCleanupJobStoreDoesNotReclaimRunning(t *testing.T) {
 	}
 	if len(secondClaim) != 0 {
 		t.Fatalf("expected no reclaimed running jobs, got %d", len(secondClaim))
+	}
+}
+
+func TestWorkspaceCleanupJobStoreReclaimsStaleRunningJobs(t *testing.T) {
+	t.Parallel()
+
+	store := newTestMySQLStore(t)
+	sessionID := seedPracticeSession(t, store, seedPracticeSessionParams{
+		userID:     12,
+		scenarioID: 1,
+		templateID: 1,
+		runnerRef:  "ws-cleanup-stale-running",
+		workspace:  "/tmp/ws-cleanup-stale-running",
+		status:     "expired",
+	})
+
+	now := time.Date(2026, 5, 24, 13, 45, 0, 0, time.UTC)
+	if err := store.UpsertWorkspaceCleanupJob(context.Background(), domain.WorkspaceCleanupJob{
+		PracticeSessionID: sessionID,
+		WorkspaceID:       "ws-cleanup-stale-running",
+		Reason:            "expired",
+		ScheduledAt:       now.Add(-time.Minute),
+		Status:            "pending",
+	}); err != nil {
+		t.Fatalf("seed cleanup job: %v", err)
+	}
+
+	firstClaim, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), now, 10)
+	if err != nil {
+		t.Fatalf("first claim due cleanup jobs: %v", err)
+	}
+	if len(firstClaim) != 1 {
+		t.Fatalf("expected one initially claimed job, got %d", len(firstClaim))
+	}
+
+	reclaimAt := now.Add(service.WorkspaceCleanupJobLeaseTimeout + time.Minute)
+	reclaimed, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), reclaimAt, 10)
+	if err != nil {
+		t.Fatalf("reclaim stale running cleanup jobs: %v", err)
+	}
+	if len(reclaimed) != 1 {
+		t.Fatalf("expected one reclaimed stale running job, got %d", len(reclaimed))
+	}
+	if reclaimed[0].ID != firstClaim[0].ID {
+		t.Fatalf("expected reclaimed cleanup job id %d, got %d", firstClaim[0].ID, reclaimed[0].ID)
+	}
+	if reclaimed[0].Status != "running" {
+		t.Fatalf("expected reclaimed cleanup job status running, got %q", reclaimed[0].Status)
+	}
+	if reclaimed[0].AttemptCount != 2 {
+		t.Fatalf("expected reclaimed cleanup job attempt_count 2, got %d", reclaimed[0].AttemptCount)
+	}
+	if reclaimed[0].LastError != "" {
+		t.Fatalf("expected reclaimed cleanup job last_error to be cleared, got %q", reclaimed[0].LastError)
 	}
 }
 

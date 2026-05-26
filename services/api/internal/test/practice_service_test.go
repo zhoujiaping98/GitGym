@@ -604,6 +604,54 @@ func TestPracticeServiceOrphanTransitionUpsertsDelayedCleanupJob(t *testing.T) {
 	}
 }
 
+func TestPracticeServiceOrphanTransitionFallsBackToRunnerDeleteWhenCleanupUpsertFails(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 24, 16, 15, 0, 0, time.UTC)
+	store := &stubPracticeSessionStore{
+		upsertCleanupJobErr: errors.New("db unavailable"),
+	}
+	runnerClient := &stubRunnerClient{
+		workspace: runner.Workspace{
+			ID:       "ws-orphan-fallback",
+			Path:     "/tmp/ws-orphan-fallback",
+			Template: "standard",
+		},
+		connectErr: runner.ErrWorkspaceNotFound,
+	}
+	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
+
+	created, err := svc.CreatePracticeSession(context.Background(), service.CreatePracticeSessionInput{
+		UserID:     42,
+		ScenarioID: 1,
+		TemplateID: 1,
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	_, err = svc.ConnectTerminal(context.Background(), 42, created.ID)
+
+	if !errors.Is(err, service.ErrPracticeSessionOrphaned) {
+		t.Fatalf("expected orphaned session error, got %v", err)
+	}
+	if len(store.upsertCleanupJobCalls) != 0 {
+		t.Fatalf("expected failed cleanup upsert to avoid recording success, got %d", len(store.upsertCleanupJobCalls))
+	}
+	if runnerClient.deleteWorkspaceCalls != 1 {
+		t.Fatalf("expected one fallback delete workspace call, got %d", runnerClient.deleteWorkspaceCalls)
+	}
+	if runnerClient.lastDeleteWorkspaceID != "ws-orphan-fallback" {
+		t.Fatalf("expected fallback delete workspace id ws-orphan-fallback, got %q", runnerClient.lastDeleteWorkspaceID)
+	}
+	if runnerClient.lastDeleteReason != service.PracticeSessionStatusOrphaned {
+		t.Fatalf("expected fallback delete reason %q, got %q", service.PracticeSessionStatusOrphaned, runnerClient.lastDeleteReason)
+	}
+	if runnerClient.lastDeleteDelay != 10*time.Minute {
+		t.Fatalf("expected fallback delete delay %v, got %v", 10*time.Minute, runnerClient.lastDeleteDelay)
+	}
+}
+
 func TestPracticeServiceReturnsRepoStateForSession(t *testing.T) {
 	t.Parallel()
 
@@ -805,6 +853,55 @@ func TestPracticeServiceExpireSweepUpsertsCleanupJob(t *testing.T) {
 	}
 	if !job.ScheduledAt.Equal(now) {
 		t.Fatalf("expected immediate cleanup scheduling at %v, got %v", now, job.ScheduledAt)
+	}
+}
+
+func TestPracticeServiceExpireSweepFallsBackToRunnerDeleteWhenCleanupUpsertFails(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 24, 15, 30, 0, 0, time.UTC)
+	store := &stubPracticeSessionStore{
+		upsertCleanupJobErr: errors.New("db unavailable"),
+		expirableSessions: []domain.PracticeSession{
+			{
+				ID:               51,
+				UserID:           8,
+				ScenarioID:       1,
+				TemplateID:       1,
+				RunnerRef:        "ws-sweep-fallback",
+				WorkspacePathRef: "/tmp/ws-sweep-fallback",
+				Status:           "active",
+				StartedAt:        now.Add(-4 * time.Hour),
+				ExpiresAt:        now.Add(-5 * time.Minute),
+				LastActivityAt:   now.Add(-10 * time.Minute),
+			},
+		},
+	}
+	runnerClient := &stubRunnerClient{}
+	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
+
+	expiredCount, err := svc.ExpireStalePracticeSessions(context.Background())
+
+	if err != nil {
+		t.Fatalf("expire stale practice sessions: %v", err)
+	}
+	if expiredCount != 1 {
+		t.Fatalf("expected one expired session, got %d", expiredCount)
+	}
+	if len(store.upsertCleanupJobCalls) != 0 {
+		t.Fatalf("expected failed cleanup upsert to avoid recording success, got %d", len(store.upsertCleanupJobCalls))
+	}
+	if runnerClient.deleteWorkspaceCalls != 1 {
+		t.Fatalf("expected one fallback delete workspace call, got %d", runnerClient.deleteWorkspaceCalls)
+	}
+	if runnerClient.lastDeleteWorkspaceID != "ws-sweep-fallback" {
+		t.Fatalf("expected fallback delete workspace id ws-sweep-fallback, got %q", runnerClient.lastDeleteWorkspaceID)
+	}
+	if runnerClient.lastDeleteReason != service.PracticeSessionStatusExpired {
+		t.Fatalf("expected fallback delete reason %q, got %q", service.PracticeSessionStatusExpired, runnerClient.lastDeleteReason)
+	}
+	if runnerClient.lastDeleteDelay != 0 {
+		t.Fatalf("expected immediate fallback delete delay 0, got %v", runnerClient.lastDeleteDelay)
 	}
 }
 
@@ -1053,6 +1150,72 @@ func TestPracticeServiceRunWorkspaceCleanupDueJobsProcessesInMemoryCleanupJobs(t
 	}
 	if runnerClient.deleteWorkspaceCalls != 1 {
 		t.Fatalf("expected cleanup job to be consumed once, got %d deletes", runnerClient.deleteWorkspaceCalls)
+	}
+}
+
+func TestInMemoryPracticeSessionStoreReclaimsStaleRunningCleanupJobs(t *testing.T) {
+	t.Parallel()
+
+	store := service.NewInMemoryPracticeSessionStore()
+	now := time.Date(2026, 5, 25, 9, 30, 0, 0, time.UTC)
+
+	session, err := store.CreatePracticeSession(context.Background(), domain.PracticeSession{
+		UserID:           42,
+		ScenarioID:       1,
+		TemplateID:       1,
+		RunnerRef:        "ws-in-memory-stale-running",
+		WorkspacePathRef: "/tmp/ws-in-memory-stale-running",
+		Status:           service.PracticeSessionStatusExpired,
+		StartedAt:        now.Add(-4 * time.Hour),
+		ExpiresAt:        now.Add(-2 * time.Hour),
+		LastActivityAt:   now.Add(-2 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	if err := store.UpsertWorkspaceCleanupJob(context.Background(), domain.WorkspaceCleanupJob{
+		PracticeSessionID: session.ID,
+		WorkspaceID:       session.RunnerRef,
+		Reason:            service.PracticeSessionStatusExpired,
+		ScheduledAt:       now.Add(-time.Minute),
+		Status:            "pending",
+	}); err != nil {
+		t.Fatalf("seed cleanup job: %v", err)
+	}
+
+	firstClaim, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), now, 10)
+	if err != nil {
+		t.Fatalf("first claim due cleanup jobs: %v", err)
+	}
+	if len(firstClaim) != 1 {
+		t.Fatalf("expected one initially claimed job, got %d", len(firstClaim))
+	}
+
+	secondClaim, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), now, 10)
+	if err != nil {
+		t.Fatalf("second claim due cleanup jobs: %v", err)
+	}
+	if len(secondClaim) != 0 {
+		t.Fatalf("expected no immediate running job reclaim, got %d", len(secondClaim))
+	}
+
+	reclaimAt := now.Add(service.WorkspaceCleanupJobLeaseTimeout + time.Minute)
+	reclaimed, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), reclaimAt, 10)
+	if err != nil {
+		t.Fatalf("reclaim stale running cleanup jobs: %v", err)
+	}
+	if len(reclaimed) != 1 {
+		t.Fatalf("expected one reclaimed stale running job, got %d", len(reclaimed))
+	}
+	if reclaimed[0].ID != firstClaim[0].ID {
+		t.Fatalf("expected reclaimed cleanup job id %d, got %d", firstClaim[0].ID, reclaimed[0].ID)
+	}
+	if reclaimed[0].AttemptCount != 2 {
+		t.Fatalf("expected reclaimed cleanup job attempt_count 2, got %d", reclaimed[0].AttemptCount)
+	}
+	if reclaimed[0].Status != "running" {
+		t.Fatalf("expected reclaimed cleanup job status running, got %q", reclaimed[0].Status)
 	}
 }
 
