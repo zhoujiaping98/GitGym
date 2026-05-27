@@ -1219,6 +1219,110 @@ func TestInMemoryPracticeSessionStoreReclaimsStaleRunningCleanupJobs(t *testing.
 	}
 }
 
+func TestInMemoryPracticeSessionStoreDoesNotReclaimExhaustedRunningCleanupJobs(t *testing.T) {
+	t.Parallel()
+
+	store := service.NewInMemoryPracticeSessionStore()
+	now := time.Date(2026, 5, 27, 11, 30, 0, 0, time.UTC)
+
+	session, err := store.CreatePracticeSession(context.Background(), domain.PracticeSession{
+		UserID:           52,
+		ScenarioID:       1,
+		TemplateID:       1,
+		RunnerRef:        "ws-in-memory-exhausted-running",
+		WorkspacePathRef: "/tmp/ws-in-memory-exhausted-running",
+		Status:           service.PracticeSessionStatusExpired,
+		StartedAt:        now.Add(-4 * time.Hour),
+		ExpiresAt:        now.Add(-2 * time.Hour),
+		LastActivityAt:   now.Add(-2 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("create practice session: %v", err)
+	}
+
+	if err := store.UpsertWorkspaceCleanupJob(context.Background(), domain.WorkspaceCleanupJob{
+		PracticeSessionID: session.ID,
+		WorkspaceID:       session.RunnerRef,
+		Reason:            service.PracticeSessionStatusExpired,
+		ScheduledAt:       now.Add(-time.Minute),
+		Status:            "pending",
+	}); err != nil {
+		t.Fatalf("seed cleanup job: %v", err)
+	}
+
+	for attempt := 1; attempt <= 5; attempt++ {
+		claimed, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), now, 10)
+		if err != nil {
+			t.Fatalf("claim cleanup jobs on attempt %d: %v", attempt, err)
+		}
+		if len(claimed) != 1 {
+			t.Fatalf("expected one claimed cleanup job on attempt %d, got %d", attempt, len(claimed))
+		}
+		if attempt < 5 {
+			if err := store.MarkWorkspaceCleanupJobFailed(context.Background(), claimed[0].ID, now, "transient failure"); err != nil {
+				t.Fatalf("mark cleanup job failed on attempt %d: %v", attempt, err)
+			}
+		}
+	}
+
+	reclaimAt := now.Add(service.WorkspaceCleanupJobLeaseTimeout + time.Minute)
+	reclaimed, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), reclaimAt, 10)
+	if err != nil {
+		t.Fatalf("claim exhausted running cleanup jobs: %v", err)
+	}
+	if len(reclaimed) != 0 {
+		t.Fatalf("expected no exhausted running cleanup jobs to be reclaimed, got %d", len(reclaimed))
+	}
+}
+
+func TestPracticeServiceRunWorkspaceCleanupDueJobsStopsRetryingAfterMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	store := &stubPracticeSessionStore{
+		claimedCleanupJobs: []domain.WorkspaceCleanupJob{
+			{
+				ID:                17,
+				PracticeSessionID: 71,
+				WorkspaceID:       "ws-cleanup-exhausted",
+				Reason:            service.PracticeSessionStatusExpired,
+				ScheduledAt:       now.Add(-time.Minute),
+				Status:            "running",
+				AttemptCount:      5,
+			},
+		},
+	}
+	runnerClient := &stubRunnerClient{
+		deleteErr: errors.New("runner unavailable"),
+	}
+	svc := service.NewPracticeService(store, runnerClient, func() time.Time { return now })
+
+	err := svc.RunWorkspaceCleanupDueJobs(context.Background(), 10)
+
+	if err == nil {
+		t.Fatal("expected exhausted cleanup failure error")
+	}
+	if runnerClient.deleteWorkspaceCalls != 1 {
+		t.Fatalf("expected one delete workspace call, got %d", runnerClient.deleteWorkspaceCalls)
+	}
+	if len(store.markCleanupFailedCalls) != 1 {
+		t.Fatalf("expected one failed cleanup mark, got %d", len(store.markCleanupFailedCalls))
+	}
+	failure := store.markCleanupFailedCalls[0]
+	if failure.jobID != 17 {
+		t.Fatalf("expected failed cleanup job id 17, got %d", failure.jobID)
+	}
+	if !failure.scheduledAt.Equal(now) {
+		t.Fatalf("expected exhausted cleanup job scheduled_at %v, got %v", now, failure.scheduledAt)
+	}
+	if !strings.Contains(failure.lastError, "runner unavailable") {
+		t.Fatalf("expected exhausted cleanup last error to include runner failure, got %q", failure.lastError)
+	}
+	if !strings.Contains(err.Error(), "exhausted") {
+		t.Fatalf("expected exhausted cleanup error, got %v", err)
+	}
+}
+
 func TestRunnerClientDeleteWorkspaceSendsCleanupRequest(t *testing.T) {
 	t.Parallel()
 

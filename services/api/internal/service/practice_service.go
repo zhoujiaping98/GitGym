@@ -17,6 +17,7 @@ const (
 	practiceSessionTTL                = 2 * time.Hour
 	practiceSessionOrphanCleanupGrace = 10 * time.Minute
 	workspaceCleanupWriteTimeout      = 5 * time.Second
+	WorkspaceCleanupJobMaxAttempts    = 5
 	WorkspaceCleanupJobLeaseTimeout   = 15 * time.Minute
 )
 
@@ -383,8 +384,16 @@ func (s *practiceService) RunWorkspaceCleanupDueJobs(ctx context.Context, limit 
 			continue
 		}
 
+		if workspaceCleanupAttemptsExhausted(job.AttemptCount) {
+			runErrs = append(runErrs, fmt.Errorf("cleanup job %d exhausted retries after attempt %d: %w", job.ID, job.AttemptCount, err))
+			if markErr := s.markWorkspaceCleanupJobFailed(ctx, job, now, err.Error()); markErr != nil {
+				runErrs = append(runErrs, markErr)
+			}
+			continue
+		}
+
 		runErrs = append(runErrs, fmt.Errorf("delete workspace for cleanup job %d: %w", job.ID, err))
-		nextRun := nextWorkspaceCleanupRetryAt(s.now().UTC(), job.AttemptCount)
+		nextRun := nextWorkspaceCleanupRetryAt(now, job.AttemptCount)
 		if markErr := s.markWorkspaceCleanupJobFailed(ctx, job, nextRun, err.Error()); markErr != nil {
 			runErrs = append(runErrs, markErr)
 		}
@@ -565,6 +574,10 @@ func nextWorkspaceCleanupRetryAt(now time.Time, attempt uint32) time.Time {
 	}
 }
 
+func workspaceCleanupAttemptsExhausted(attempt uint32) bool {
+	return attempt >= WorkspaceCleanupJobMaxAttempts
+}
+
 type InMemoryPracticeSessionStore struct {
 	mu                  sync.Mutex
 	nextID              uint64
@@ -702,10 +715,16 @@ func (s *InMemoryPracticeSessionStore) ClaimDueWorkspaceCleanupJobs(_ context.Co
 	for _, job := range s.cleanupJobs {
 		switch job.Status {
 		case "pending", "failed":
+			if workspaceCleanupAttemptsExhausted(job.AttemptCount) {
+				continue
+			}
 			if job.ScheduledAt.After(now) {
 				continue
 			}
 		case "running":
+			if workspaceCleanupAttemptsExhausted(job.AttemptCount) {
+				continue
+			}
 			if job.UpdatedAt.After(staleRunningBefore) {
 				continue
 			}

@@ -152,8 +152,8 @@ SELECT
   updated_at
 FROM workspace_cleanup_jobs
 WHERE (
-  (status IN (?, ?) AND scheduled_at <= ?)
-  OR (status = ? AND updated_at <= ?)
+  (status IN (?, ?) AND scheduled_at <= ? AND attempt_count < ?)
+  OR (status = ? AND updated_at <= ? AND attempt_count < ?)
 )
 ORDER BY scheduled_at ASC, id ASC
 LIMIT ?
@@ -449,7 +449,18 @@ func (s *MySQLStore) ClaimDueWorkspaceCleanupJobs(ctx context.Context, now time.
 	}()
 
 	staleRunningBefore := now.UTC().Add(-service.WorkspaceCleanupJobLeaseTimeout)
-	rows, err := tx.QueryContext(ctx, claimDueWorkspaceCleanupJobsQuery, "pending", "failed", now, "running", staleRunningBefore, limit)
+	rows, err := tx.QueryContext(
+		ctx,
+		claimDueWorkspaceCleanupJobsQuery,
+		"pending",
+		"failed",
+		now,
+		service.WorkspaceCleanupJobMaxAttempts,
+		"running",
+		staleRunningBefore,
+		service.WorkspaceCleanupJobMaxAttempts,
+		limit,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("query due workspace cleanup jobs: %w", err)
 	}
