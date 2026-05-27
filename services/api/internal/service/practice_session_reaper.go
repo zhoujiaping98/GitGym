@@ -50,6 +50,19 @@ func StartWorkspaceCleanupLoop(ctx context.Context, practiceService PracticeServ
 		if err := practiceService.RunWorkspaceCleanupDueJobs(ctx, defaultWorkspaceCleanupSweepLimit); err != nil && logger != nil {
 			logger.Printf("workspace cleanup sweep failed: %v", err)
 		}
+		summary, err := practiceService.ReconcileWorkspaceCleanupJobs(ctx, defaultWorkspaceCleanupSweepLimit)
+		if err != nil {
+			if logger != nil {
+				logger.Printf("workspace cleanup reconciliation failed: %v", err)
+			}
+			return
+		}
+		if logger != nil && summary.BackfilledJobs > 0 {
+			logger.Printf("workspace cleanup reconciliation backfilled %d jobs", summary.BackfilledJobs)
+		}
+		if logger != nil && summary.ExhaustedFailedJobs > 0 {
+			logger.Printf("workspace cleanup reconciliation found %d exhausted failed jobs", summary.ExhaustedFailedJobs)
+		}
 	}
 
 	runSweep()

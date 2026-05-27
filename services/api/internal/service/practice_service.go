@@ -60,6 +60,11 @@ type CreatePracticeSessionInput struct {
 	TemplateID uint64
 }
 
+type WorkspaceCleanupReconciliationSummary struct {
+	BackfilledJobs      int
+	ExhaustedFailedJobs int
+}
+
 type PracticeSessionStore interface {
 	CreatePracticeSession(ctx context.Context, session domain.PracticeSession) (domain.PracticeSession, error)
 	CurrentPracticeSession(ctx context.Context, userID uint64) (domain.PracticeSession, error)
@@ -70,6 +75,8 @@ type PracticeSessionStore interface {
 	ClaimDueWorkspaceCleanupJobs(ctx context.Context, now time.Time, limit int) ([]domain.WorkspaceCleanupJob, error)
 	MarkWorkspaceCleanupJobSucceeded(ctx context.Context, jobID uint64) error
 	MarkWorkspaceCleanupJobFailed(ctx context.Context, jobID uint64, scheduledAt time.Time, lastErr string) error
+	ListPracticeSessionsMissingWorkspaceCleanupJob(ctx context.Context, limit int) ([]domain.PracticeSession, error)
+	ListExhaustedWorkspaceCleanupJobs(ctx context.Context, limit int) ([]domain.WorkspaceCleanupJob, error)
 }
 
 type PracticeService interface {
@@ -85,6 +92,7 @@ type PracticeService interface {
 	ConnectTerminal(ctx context.Context, userID uint64, sessionID uint64) (runner.TerminalConnection, error)
 	ExpireStalePracticeSessions(ctx context.Context) (int, error)
 	RunWorkspaceCleanupDueJobs(ctx context.Context, limit int) error
+	ReconcileWorkspaceCleanupJobs(ctx context.Context, limit int) (WorkspaceCleanupReconciliationSummary, error)
 }
 
 type practiceService struct {
@@ -400,6 +408,55 @@ func (s *practiceService) RunWorkspaceCleanupDueJobs(ctx context.Context, limit 
 	}
 
 	return errors.Join(runErrs...)
+}
+
+func (s *practiceService) ReconcileWorkspaceCleanupJobs(ctx context.Context, limit int) (WorkspaceCleanupReconciliationSummary, error) {
+	if s.store == nil {
+		return WorkspaceCleanupReconciliationSummary{}, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	now := s.now().UTC()
+	sessions, err := s.store.ListPracticeSessionsMissingWorkspaceCleanupJob(ctx, limit)
+	if err != nil {
+		return WorkspaceCleanupReconciliationSummary{}, fmt.Errorf("list practice sessions missing cleanup jobs: %w", err)
+	}
+
+	summary := WorkspaceCleanupReconciliationSummary{}
+	for _, session := range sessions {
+		if session.Status != PracticeSessionStatusExpired && session.Status != PracticeSessionStatusOrphaned {
+			continue
+		}
+
+		scheduledAt := now
+		if session.Status == PracticeSessionStatusOrphaned && session.EndedAt != nil {
+			graceSchedule := session.EndedAt.UTC().Add(practiceSessionOrphanCleanupGrace)
+			if graceSchedule.After(scheduledAt) {
+				scheduledAt = graceSchedule
+			}
+		}
+
+		if err := s.store.UpsertWorkspaceCleanupJob(ctx, domain.WorkspaceCleanupJob{
+			PracticeSessionID: session.ID,
+			WorkspaceID:       session.RunnerRef,
+			Reason:            session.Status,
+			ScheduledAt:       scheduledAt,
+			Status:            "pending",
+		}); err != nil {
+			return WorkspaceCleanupReconciliationSummary{}, fmt.Errorf("backfill cleanup job for session %d: %w", session.ID, err)
+		}
+		summary.BackfilledJobs++
+	}
+
+	exhaustedJobs, err := s.store.ListExhaustedWorkspaceCleanupJobs(ctx, limit)
+	if err != nil {
+		return WorkspaceCleanupReconciliationSummary{}, fmt.Errorf("list exhausted cleanup jobs: %w", err)
+	}
+	summary.ExhaustedFailedJobs = len(exhaustedJobs)
+
+	return summary, nil
 }
 
 func (s *practiceService) markWorkspaceCleanupJobSucceeded(
@@ -789,4 +846,65 @@ func (s *InMemoryPracticeSessionStore) MarkWorkspaceCleanupJobFailed(_ context.C
 	job.UpdatedAt = time.Now().UTC()
 	s.cleanupJobs[jobID] = job
 	return nil
+}
+
+func (s *InMemoryPracticeSessionStore) ListPracticeSessionsMissingWorkspaceCleanupJob(_ context.Context, limit int) ([]domain.PracticeSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if limit <= 0 {
+		return []domain.PracticeSession{}, nil
+	}
+
+	sessionIDs := make([]uint64, 0, len(s.sessions))
+	for id := range s.sessions {
+		sessionIDs = append(sessionIDs, id)
+	}
+	sort.Slice(sessionIDs, func(i, j int) bool { return sessionIDs[i] < sessionIDs[j] })
+
+	sessions := make([]domain.PracticeSession, 0, len(sessionIDs))
+	for _, id := range sessionIDs {
+		session := s.sessions[id]
+		if session.Status != PracticeSessionStatusExpired && session.Status != PracticeSessionStatusOrphaned {
+			continue
+		}
+		if _, ok := s.cleanupJobBySession[session.ID]; ok {
+			continue
+		}
+		sessions = append(sessions, session)
+		if len(sessions) == limit {
+			break
+		}
+	}
+
+	return sessions, nil
+}
+
+func (s *InMemoryPracticeSessionStore) ListExhaustedWorkspaceCleanupJobs(_ context.Context, limit int) ([]domain.WorkspaceCleanupJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if limit <= 0 {
+		return []domain.WorkspaceCleanupJob{}, nil
+	}
+
+	jobIDs := make([]uint64, 0, len(s.cleanupJobs))
+	for id := range s.cleanupJobs {
+		jobIDs = append(jobIDs, id)
+	}
+	sort.Slice(jobIDs, func(i, j int) bool { return jobIDs[i] < jobIDs[j] })
+
+	jobs := make([]domain.WorkspaceCleanupJob, 0, len(jobIDs))
+	for _, id := range jobIDs {
+		job := s.cleanupJobs[id]
+		if job.Status != "failed" || !workspaceCleanupAttemptsExhausted(job.AttemptCount) {
+			continue
+		}
+		jobs = append(jobs, job)
+		if len(jobs) == limit {
+			break
+		}
+	}
+
+	return jobs, nil
 }

@@ -903,6 +903,7 @@ type stubPracticeService struct {
 	practiceSessionRepoStateFunc func(context.Context, uint64, uint64) (runner.RepoState, error)
 	connectTerminalFunc          func(context.Context, uint64, uint64) (runner.TerminalConnection, error)
 	expireStaleSessionsFunc      func(context.Context) (int, error)
+	reconcileCleanupJobsFunc     func(context.Context, int) (service.WorkspaceCleanupReconciliationSummary, error)
 	listTemplatesResult          []service.PracticeTemplate
 	listScenariosResult          []service.PracticeScenario
 	listTemplatesErr             error
@@ -1002,6 +1003,13 @@ func (s *stubPracticeService) ExpireStalePracticeSessions(ctx context.Context) (
 	return 0, nil
 }
 
+func (s *stubPracticeService) ReconcileWorkspaceCleanupJobs(ctx context.Context, limit int) (service.WorkspaceCleanupReconciliationSummary, error) {
+	if s.reconcileCleanupJobsFunc != nil {
+		return s.reconcileCleanupJobsFunc(ctx, limit)
+	}
+	return service.WorkspaceCleanupReconciliationSummary{}, nil
+}
+
 func authStoreWithSession(rawToken string, userID uint64) *stubUserStore {
 	return &stubUserStore{
 		sessionByTokenHash: map[string]domain.BrowserSession{
@@ -1057,6 +1065,14 @@ func (s *persistentStubStore) ExpirePracticeSessions(ctx context.Context, before
 
 func (s *persistentStubStore) UpsertWorkspaceCleanupJob(ctx context.Context, job domain.WorkspaceCleanupJob) error {
 	return s.practiceSessions.UpsertWorkspaceCleanupJob(ctx, job)
+}
+
+func (s *persistentStubStore) ListPracticeSessionsMissingWorkspaceCleanupJob(ctx context.Context, limit int) ([]domain.PracticeSession, error) {
+	return s.practiceSessions.ListPracticeSessionsMissingWorkspaceCleanupJob(ctx, limit)
+}
+
+func (s *persistentStubStore) ListExhaustedWorkspaceCleanupJobs(ctx context.Context, limit int) ([]domain.WorkspaceCleanupJob, error) {
+	return s.practiceSessions.ListExhaustedWorkspaceCleanupJobs(ctx, limit)
 }
 
 func (s *catalogPersistentStubStore) ListPracticeTemplates(context.Context) ([]service.PracticeTemplate, error) {

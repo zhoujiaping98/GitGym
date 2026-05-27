@@ -85,9 +85,61 @@ func TestStartWorkspaceCleanupLoopSweepsImmediatelyAndOnInterval(t *testing.T) {
 	wg.Wait()
 }
 
+func TestStartWorkspaceCleanupLoopRunsReconciliationImmediatelyAndOnInterval(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	executions := make(chan struct{}, 4)
+	reconciliations := make(chan struct{}, 4)
+	svc := &stubCleanupLoopPracticeService{
+		runWorkspaceCleanupDueJobsFunc: func(context.Context, int) error {
+			executions <- struct{}{}
+			return nil
+		},
+		reconcileWorkspaceCleanupJobsFunc: func(context.Context, int) (service.WorkspaceCleanupReconciliationSummary, error) {
+			reconciliations <- struct{}{}
+			return service.WorkspaceCleanupReconciliationSummary{}, nil
+		},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		service.StartWorkspaceCleanupLoop(ctx, svc, 10*time.Millisecond, nil)
+	}()
+
+	select {
+	case <-executions:
+	case <-time.After(time.Second):
+		t.Fatal("expected initial cleanup execution sweep")
+	}
+	select {
+	case <-reconciliations:
+	case <-time.After(time.Second):
+		t.Fatal("expected initial cleanup reconciliation sweep")
+	}
+	select {
+	case <-executions:
+	case <-time.After(time.Second):
+		t.Fatal("expected interval cleanup execution sweep")
+	}
+	select {
+	case <-reconciliations:
+	case <-time.After(time.Second):
+		t.Fatal("expected interval cleanup reconciliation sweep")
+	}
+
+	cancel()
+	wg.Wait()
+}
+
 type stubCleanupLoopPracticeService struct {
 	stubPracticeService
-	runWorkspaceCleanupDueJobsFunc func(context.Context, int) error
+	runWorkspaceCleanupDueJobsFunc    func(context.Context, int) error
+	reconcileWorkspaceCleanupJobsFunc func(context.Context, int) (service.WorkspaceCleanupReconciliationSummary, error)
 }
 
 func (s *stubCleanupLoopPracticeService) RunWorkspaceCleanupDueJobs(ctx context.Context, limit int) error {
@@ -95,6 +147,13 @@ func (s *stubCleanupLoopPracticeService) RunWorkspaceCleanupDueJobs(ctx context.
 		return s.runWorkspaceCleanupDueJobsFunc(ctx, limit)
 	}
 	return nil
+}
+
+func (s *stubCleanupLoopPracticeService) ReconcileWorkspaceCleanupJobs(ctx context.Context, limit int) (service.WorkspaceCleanupReconciliationSummary, error) {
+	if s.reconcileWorkspaceCleanupJobsFunc != nil {
+		return s.reconcileWorkspaceCleanupJobsFunc(ctx, limit)
+	}
+	return service.WorkspaceCleanupReconciliationSummary{}, nil
 }
 
 var _ service.PracticeService = (*stubPracticeService)(nil)

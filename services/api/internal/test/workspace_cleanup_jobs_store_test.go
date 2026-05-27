@@ -468,6 +468,105 @@ func TestWorkspaceCleanupJobStoreDoesNotReclaimExhaustedRunningJobs(t *testing.T
 	}
 }
 
+func TestWorkspaceCleanupJobStoreListsSessionsMissingCleanupJobs(t *testing.T) {
+	t.Parallel()
+
+	store := newTestMySQLStore(t)
+	expiredSessionID := seedPracticeSession(t, store, seedPracticeSessionParams{
+		userID:     16,
+		scenarioID: 1,
+		templateID: 1,
+		runnerRef:  "ws-missing-a",
+		workspace:  "/tmp/ws-missing-a",
+		status:     "expired",
+	})
+	orphanedSessionID := seedPracticeSession(t, store, seedPracticeSessionParams{
+		userID:     17,
+		scenarioID: 1,
+		templateID: 1,
+		runnerRef:  "ws-missing-b",
+		workspace:  "/tmp/ws-missing-b",
+		status:     "orphaned",
+	})
+	coveredSessionID := seedPracticeSession(t, store, seedPracticeSessionParams{
+		userID:     18,
+		scenarioID: 1,
+		templateID: 1,
+		runnerRef:  "ws-covered",
+		workspace:  "/tmp/ws-covered",
+		status:     "expired",
+	})
+	if err := store.UpsertWorkspaceCleanupJob(context.Background(), domain.WorkspaceCleanupJob{
+		PracticeSessionID: coveredSessionID,
+		WorkspaceID:       "ws-covered",
+		Reason:            service.PracticeSessionStatusExpired,
+		ScheduledAt:       time.Date(2026, 5, 27, 15, 30, 0, 0, time.UTC),
+		Status:            "pending",
+	}); err != nil {
+		t.Fatalf("seed covered cleanup job: %v", err)
+	}
+
+	sessions, err := store.ListPracticeSessionsMissingWorkspaceCleanupJob(context.Background(), 10)
+
+	if err != nil {
+		t.Fatalf("list sessions missing cleanup jobs: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected two sessions missing cleanup jobs, got %d", len(sessions))
+	}
+	if sessions[0].ID != expiredSessionID || sessions[1].ID != orphanedSessionID {
+		t.Fatalf("expected missing cleanup sessions %d and %d, got %d and %d", expiredSessionID, orphanedSessionID, sessions[0].ID, sessions[1].ID)
+	}
+}
+
+func TestWorkspaceCleanupJobStoreListsExhaustedFailedJobs(t *testing.T) {
+	t.Parallel()
+
+	store := newTestMySQLStore(t)
+	sessionID := seedPracticeSession(t, store, seedPracticeSessionParams{
+		userID:     19,
+		scenarioID: 1,
+		templateID: 1,
+		runnerRef:  "ws-exhausted",
+		workspace:  "/tmp/ws-exhausted",
+		status:     "expired",
+	})
+	now := time.Date(2026, 5, 27, 16, 0, 0, 0, time.UTC)
+	if err := store.UpsertWorkspaceCleanupJob(context.Background(), domain.WorkspaceCleanupJob{
+		PracticeSessionID: sessionID,
+		WorkspaceID:       "ws-exhausted",
+		Reason:            service.PracticeSessionStatusExpired,
+		ScheduledAt:       now,
+		Status:            "pending",
+	}); err != nil {
+		t.Fatalf("seed cleanup job: %v", err)
+	}
+	for attempt := uint32(1); attempt <= service.WorkspaceCleanupJobMaxAttempts; attempt++ {
+		claimed, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), now, 10)
+		if err != nil {
+			t.Fatalf("claim cleanup jobs on attempt %d: %v", attempt, err)
+		}
+		if len(claimed) != 1 {
+			t.Fatalf("expected one claimed job on attempt %d, got %d", attempt, len(claimed))
+		}
+		if err := store.MarkWorkspaceCleanupJobFailed(context.Background(), claimed[0].ID, now, "terminal failure"); err != nil {
+			t.Fatalf("mark cleanup job failed on attempt %d: %v", attempt, err)
+		}
+	}
+
+	jobs, err := store.ListExhaustedWorkspaceCleanupJobs(context.Background(), 10)
+
+	if err != nil {
+		t.Fatalf("list exhausted cleanup jobs: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("expected one exhausted cleanup job, got %d", len(jobs))
+	}
+	if jobs[0].PracticeSessionID != sessionID {
+		t.Fatalf("expected exhausted cleanup job for session %d, got %d", sessionID, jobs[0].PracticeSessionID)
+	}
+}
+
 type seedPracticeSessionParams struct {
 	userID     uint64
 	scenarioID uint64

@@ -175,6 +175,45 @@ FROM workspace_cleanup_jobs
 WHERE practice_session_id = ?
 ORDER BY scheduled_at ASC, id ASC
 `
+	listPracticeSessionsMissingWorkspaceCleanupJobQuery = `
+SELECT
+  ps.id,
+  ps.user_id,
+  ps.scenario_id,
+  ps.template_id,
+  ps.runner_ref,
+  ps.workspace_path_ref,
+  ps.status,
+  ps.started_at,
+  ps.ended_at,
+  ps.expires_at,
+  ps.last_activity_at
+FROM practice_sessions ps
+LEFT JOIN workspace_cleanup_jobs wcj
+  ON wcj.practice_session_id = ps.id
+WHERE ps.status IN (?, ?)
+  AND wcj.id IS NULL
+ORDER BY ps.id ASC
+LIMIT ?
+`
+	listExhaustedWorkspaceCleanupJobsQuery = `
+SELECT
+  id,
+  practice_session_id,
+  workspace_id,
+  reason,
+  scheduled_at,
+  status,
+  attempt_count,
+  last_error,
+  created_at,
+  updated_at
+FROM workspace_cleanup_jobs
+WHERE status = ?
+  AND attempt_count >= ?
+ORDER BY id ASC
+LIMIT ?
+`
 )
 
 type MySQLStore struct {
@@ -562,6 +601,70 @@ func (s *MySQLStore) ListWorkspaceCleanupJobsForSession(ctx context.Context, ses
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate workspace cleanup jobs for session: %w", err)
+	}
+
+	return jobs, nil
+}
+
+func (s *MySQLStore) ListPracticeSessionsMissingWorkspaceCleanupJob(ctx context.Context, limit int) ([]domain.PracticeSession, error) {
+	if limit <= 0 {
+		return []domain.PracticeSession{}, nil
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		listPracticeSessionsMissingWorkspaceCleanupJobQuery,
+		service.PracticeSessionStatusExpired,
+		service.PracticeSessionStatusOrphaned,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list practice sessions missing cleanup jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []domain.PracticeSession
+	for rows.Next() {
+		session, err := scanPracticeSessionRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate practice sessions missing cleanup jobs: %w", err)
+	}
+
+	return sessions, nil
+}
+
+func (s *MySQLStore) ListExhaustedWorkspaceCleanupJobs(ctx context.Context, limit int) ([]domain.WorkspaceCleanupJob, error) {
+	if limit <= 0 {
+		return []domain.WorkspaceCleanupJob{}, nil
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		listExhaustedWorkspaceCleanupJobsQuery,
+		"failed",
+		service.WorkspaceCleanupJobMaxAttempts,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list exhausted workspace cleanup jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var jobs []domain.WorkspaceCleanupJob
+	for rows.Next() {
+		job, err := scanWorkspaceCleanupJobRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate exhausted workspace cleanup jobs: %w", err)
 	}
 
 	return jobs, nil
