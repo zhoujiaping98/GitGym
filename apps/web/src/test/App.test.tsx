@@ -981,6 +981,142 @@ describe("App", () => {
     expect(within(sessionCard).getByText("!! ignored.tmp")).toBeInTheDocument();
   });
 
+  it("renders changed-file group counts and a summary row for long groups", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse({
+          data: {
+            ...defaultRepoStatePayload.data,
+            dirty: true,
+            changed_files: ["M  one.txt", "M  two.txt", "M  three.txt", "M  four.txt"],
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    const sessionCard = await screen.findByLabelText("Operational session card");
+    expect(within(sessionCard).getByText("Staged (4)")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("one.txt")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("two.txt")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("three.txt")).toBeInTheDocument();
+    expect(within(sessionCard).queryByText("four.txt")).not.toBeInTheDocument();
+    expect(within(sessionCard).getByText("+1 more")).toBeInTheDocument();
+  });
+
+  it("does not render a summary row when a group has exactly three entries", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse({
+          data: {
+            ...defaultRepoStatePayload.data,
+            dirty: true,
+            changed_files: ["?? one.md", "?? two.md", "?? three.md"],
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    const sessionCard = await screen.findByLabelText("Operational session card");
+    expect(within(sessionCard).getByText("Untracked (3)")).toBeInTheDocument();
+    expect(within(sessionCard).queryByText(/\+\d+ more/)).not.toBeInTheDocument();
+  });
+
+  it("truncates fallback raw rows with the same summary behavior", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse({
+          data: {
+            ...defaultRepoStatePayload.data,
+            dirty: true,
+            changed_files: ["!! one", "!! two", "!! three", "!! four"],
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    const sessionCard = await screen.findByLabelText("Operational session card");
+    expect(within(sessionCard).getByText("!! one")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("!! two")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("!! three")).toBeInTheDocument();
+    expect(within(sessionCard).queryByText("!! four")).not.toBeInTheDocument();
+    expect(within(sessionCard).getByText("+1 more")).toBeInTheDocument();
+  });
+
   it("keeps the last snapshot visible and marks it stale when refresh fails", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",

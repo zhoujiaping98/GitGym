@@ -1,12 +1,15 @@
 import type {
   PracticeSession,
   RepoAttribution,
-  RepoChangeEntry,
-  RepoChangeGroups,
   RepoStateView,
   TerminalSessionState,
 } from "../types";
 import { groupRepoChanges } from "../lib/repoChanges";
+import {
+  summarizeRepoChanges,
+  type SummarizedRepoChangeGroup,
+  type SummarizedRepoChanges,
+} from "../lib/repoChangeSummary";
 
 type RepoPanelProps = {
   preview?: boolean;
@@ -99,21 +102,20 @@ function repoAttributionCopy(attribution: RepoAttribution | null) {
   return null;
 }
 
-function renderChangeGroup(title: string, changes: RepoChangeEntry[]) {
-  if (changes.length === 0) {
-    return null;
-  }
-
+function renderChangeGroup(group: SummarizedRepoChangeGroup) {
   return (
-    <section className="repo-state-change-group" aria-label={title} key={title}>
-      <strong>{title}</strong>
+    <section className="repo-state-change-group" aria-label={group.title} key={group.title}>
+      <strong>{`${group.title} (${group.count})`}</strong>
       <ul className="repo-state-change-list">
-        {changes.map((change) => (
+        {group.visible.map((change) => (
           <li key={change.key}>
             <span className="repo-state-change-pill">{change.label}</span>
             <span>{change.path}</span>
           </li>
         ))}
+        {group.hiddenCount > 0 ? (
+          <li className="repo-state-change-more">{`+${group.hiddenCount} more`}</li>
+        ) : null}
       </ul>
     </section>
   );
@@ -157,9 +159,9 @@ export function RepoPanel({
     { label: "Expires", value: formatDate(session.expiresAt) },
     { label: "Terminal", value: terminalStatus },
   ];
-  const groupedChanges: RepoChangeGroups | null =
+  const summarizedChanges: SummarizedRepoChanges | null =
     repoState.status === "ready" || repoState.status === "stale"
-      ? groupRepoChanges(repoState.snapshot.changedFiles)
+      ? summarizeRepoChanges(groupRepoChanges(repoState.snapshot.changedFiles))
       : null;
 
   return (
@@ -232,16 +234,20 @@ export function RepoPanel({
                   <dd>{repoState.snapshot.dirty ? "Dirty" : "Clean"}</dd>
                 </div>
               </dl>
-              {repoState.snapshot.dirty && groupedChanges ? (
+              {repoState.snapshot.dirty && summarizedChanges ? (
                 <section className="repo-state-changes" aria-label="Changed files">
-                  {renderChangeGroup("Staged", groupedChanges.staged)}
-                  {renderChangeGroup("Unstaged", groupedChanges.unstaged)}
-                  {renderChangeGroup("Untracked", groupedChanges.untracked)}
-                  {groupedChanges.fallback.length > 0 ? (
+                  {summarizedChanges.groups.map((group) => renderChangeGroup(group))}
+                  {summarizedChanges.fallback.visible.length > 0 ||
+                  summarizedChanges.fallback.hiddenCount > 0 ? (
                     <ul className="repo-state-change-list repo-state-change-fallback">
-                      {groupedChanges.fallback.map((line) => (
+                      {summarizedChanges.fallback.visible.map((line) => (
                         <li key={line}>{line}</li>
                       ))}
+                      {summarizedChanges.fallback.hiddenCount > 0 ? (
+                        <li className="repo-state-change-more">
+                          {`+${summarizedChanges.fallback.hiddenCount} more`}
+                        </li>
+                      ) : null}
                     </ul>
                   ) : null}
                 </section>
