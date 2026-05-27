@@ -77,6 +77,22 @@ export type RepoStateSnapshot = {
   capturedAt: string;
 };
 
+export type RepoChangeBucket = "staged" | "unstaged" | "untracked";
+
+export type RepoChangeEntry = {
+  key: string;
+  bucket: RepoChangeBucket;
+  label: string;
+  path: string;
+};
+
+export type RepoChangeGroups = {
+  staged: RepoChangeEntry[];
+  unstaged: RepoChangeEntry[];
+  untracked: RepoChangeEntry[];
+  fallback: string[];
+};
+
 export type RepoStateView =
   | { status: "idle"; snapshot: null; error: null }
   | { status: "loading"; snapshot: null; error: null }

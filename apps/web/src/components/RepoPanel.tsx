@@ -1,9 +1,12 @@
 import type {
   PracticeSession,
   RepoAttribution,
+  RepoChangeEntry,
+  RepoChangeGroups,
   RepoStateView,
   TerminalSessionState,
 } from "../types";
+import { groupRepoChanges } from "../lib/repoChanges";
 
 type RepoPanelProps = {
   preview?: boolean;
@@ -96,6 +99,26 @@ function repoAttributionCopy(attribution: RepoAttribution | null) {
   return null;
 }
 
+function renderChangeGroup(title: string, changes: RepoChangeEntry[]) {
+  if (changes.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="repo-state-change-group" aria-label={title} key={title}>
+      <strong>{title}</strong>
+      <ul className="repo-state-change-list">
+        {changes.map((change) => (
+          <li key={change.key}>
+            <span className="repo-state-change-pill">{change.label}</span>
+            <span>{change.path}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function RepoPanel({
   preview = false,
   session,
@@ -134,6 +157,10 @@ export function RepoPanel({
     { label: "Expires", value: formatDate(session.expiresAt) },
     { label: "Terminal", value: terminalStatus },
   ];
+  const groupedChanges: RepoChangeGroups | null =
+    repoState.status === "ready" || repoState.status === "stale"
+      ? groupRepoChanges(repoState.snapshot.changedFiles)
+      : null;
 
   return (
     <aside className="workbench-side">
@@ -205,12 +232,19 @@ export function RepoPanel({
                   <dd>{repoState.snapshot.dirty ? "Dirty" : "Clean"}</dd>
                 </div>
               </dl>
-              {repoState.snapshot.dirty ? (
-                <ul className="repo-state-changes" aria-label="Changed files">
-                  {repoState.snapshot.changedFiles.map((entry) => (
-                    <li key={entry}>{entry}</li>
-                  ))}
-                </ul>
+              {repoState.snapshot.dirty && groupedChanges ? (
+                <section className="repo-state-changes" aria-label="Changed files">
+                  {renderChangeGroup("Staged", groupedChanges.staged)}
+                  {renderChangeGroup("Unstaged", groupedChanges.unstaged)}
+                  {renderChangeGroup("Untracked", groupedChanges.untracked)}
+                  {groupedChanges.fallback.length > 0 ? (
+                    <ul className="repo-state-change-list repo-state-change-fallback">
+                      {groupedChanges.fallback.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </section>
               ) : null}
             </>
           ) : null}

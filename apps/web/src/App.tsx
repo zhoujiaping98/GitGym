@@ -93,6 +93,10 @@ function AppStateShell({
   );
 }
 
+function isLifecycleRepoRefreshTrigger(trigger: RepoRefreshContext["trigger"]) {
+  return trigger === "session_create" || trigger === "session_reset" || trigger === "session_sync";
+}
+
 export default function App() {
   const currentSession = useCurrentSession();
   // `undefined` follows the hook-provided current session; `null` intentionally suppresses it.
@@ -221,6 +225,14 @@ export default function App() {
           current.commandText === undefined
           ? current
           : { trigger: pendingLifecycleTrigger };
+      }
+
+      if (
+        isLifecycleRepoRefreshTrigger(current.trigger) &&
+        current.commandId === undefined &&
+        current.commandText === undefined
+      ) {
+        return current;
       }
 
       return current.trigger === "session_load" &&

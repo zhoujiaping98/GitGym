@@ -620,7 +620,7 @@ describe("App", () => {
 
     expect(await within(sessionCard).findByText("reset/main")).toBeInTheDocument();
     expect(within(sessionCard).getByText("Dirty")).toBeInTheDocument();
-    expect(within(sessionCard).getByText("M notes.txt")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("notes.txt")).toBeInTheDocument();
   });
 
   it("renders lifecycle attribution after reset refreshes the current session snapshot", async () => {
@@ -846,7 +846,139 @@ describe("App", () => {
     rerender(<App />);
 
     await waitFor(() => expect(screen.getByText("Dirty")).toBeInTheDocument());
-    expect(screen.getByText("M notes.txt")).toBeInTheDocument();
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
+  });
+
+  it("renders grouped changed files for staged, unstaged, and untracked rows", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse({
+          data: {
+            ...defaultRepoStatePayload.data,
+            dirty: true,
+            changed_files: ["M  staged-only.txt", " M unstaged-only.txt", "?? draft.md"],
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    const sessionCard = await screen.findByLabelText("Operational session card");
+    expect(within(sessionCard).getByLabelText("Staged")).toBeInTheDocument();
+    expect(within(sessionCard).getByLabelText("Unstaged")).toBeInTheDocument();
+    expect(within(sessionCard).getByLabelText("Untracked")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("staged-only.txt")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("unstaged-only.txt")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("draft.md")).toBeInTheDocument();
+  });
+
+  it("renders mixed status rows in both staged and unstaged groups", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse({
+          data: {
+            ...defaultRepoStatePayload.data,
+            dirty: true,
+            changed_files: ["MM both.txt"],
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    const sessionCard = await screen.findByLabelText("Operational session card");
+    const pathMatches = within(sessionCard).getAllByText("both.txt");
+    expect(pathMatches).toHaveLength(2);
+  });
+
+  it("falls back to raw rows when a change line cannot be parsed", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse({
+          data: {
+            ...defaultRepoStatePayload.data,
+            dirty: true,
+            changed_files: ["!! ignored.tmp"],
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    const sessionCard = await screen.findByLabelText("Operational session card");
+    expect(within(sessionCard).getByText("!! ignored.tmp")).toBeInTheDocument();
   });
 
   it("keeps the last snapshot visible and marks it stale when refresh fails", async () => {
@@ -1275,7 +1407,7 @@ describe("App", () => {
     await waitFor(() =>
       expect(screen.getByText("Updated after git add .")).toBeInTheDocument(),
     );
-    expect(screen.getByText("M notes.txt")).toBeInTheDocument();
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
   });
 
   it("preserves the last successful attribution when a command-triggered refresh fails", async () => {
@@ -2606,7 +2738,9 @@ describe("App", () => {
       expect(screen.getByText("runner-43")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Snapshot refreshed after sync")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Snapshot refreshed after sync")).toBeInTheDocument();
+    });
     expect(
       screen.queryByText("Created session #43, but the server returned session #99."),
     ).not.toBeInTheDocument();
