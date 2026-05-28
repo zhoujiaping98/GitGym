@@ -74,6 +74,18 @@ type LifecycleRepoRefreshTrigger = Extract<
   "session_create" | "session_reset" | "session_sync"
 >;
 
+function preferredScenarioId(
+  scenarios: Array<{ id: number }>,
+  rememberedScenarioId: number | null,
+  fallbackScenarioId: number | null,
+) {
+  if (rememberedScenarioId !== null && scenarios.some((scenario) => scenario.id === rememberedScenarioId)) {
+    return rememberedScenarioId;
+  }
+
+  return fallbackScenarioId;
+}
+
 function AppStateShell({
   eyebrow,
   title,
@@ -152,6 +164,7 @@ export default function App() {
   const [actionError, setActionError] = useState<ActionErrorState | null>(null);
   const [pendingAction, setPendingAction] = useState<"reset" | "new-session" | "logout" | null>(null);
   const [hasAttemptedAutoCreate, setHasAttemptedAutoCreate] = useState(false);
+  const [rememberedScenarioId, setRememberedScenarioId] = useState<number | null>(null);
   const [signedOutOverride, setSignedOutOverride] = useState(false);
   const [catalogRequestKey, setCatalogRequestKey] = useState(0);
   const [catalogState, setCatalogState] = useState<CatalogState>({
@@ -576,7 +589,11 @@ export default function App() {
     setScenarioPickerState({
       status: "open",
       source,
-      selectedScenarioId: defaultScenario.id,
+      selectedScenarioId: preferredScenarioId(
+        scenarioOptions,
+        rememberedScenarioId,
+        defaultScenario.id,
+      ),
       error: null,
     });
   }
@@ -590,6 +607,7 @@ export default function App() {
   }
 
   function selectScenario(scenarioId: number) {
+    setRememberedScenarioId(scenarioId);
     setScenarioPickerState((previous) =>
       previous.status !== "open"
         ? previous

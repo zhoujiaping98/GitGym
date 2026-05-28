@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type {
   PracticeSession,
   RepoAttribution,
@@ -118,6 +118,10 @@ function sectionKeyForGroup(group: SummarizedRepoChangeGroup) {
   return group.title.toLowerCase();
 }
 
+function expandedSectionKey(snapshotKey: string | null, sectionKey: string) {
+  return `${snapshotKey ?? "none"}:${sectionKey}`;
+}
+
 function renderToggleButton(expanded: boolean, hiddenCount: number, onToggle: () => void) {
   return (
     <button className="repo-state-change-toggle" onClick={onToggle} type="button">
@@ -211,10 +215,6 @@ export function RepoPanel({
       ? repoState.snapshot.capturedAt
       : null;
 
-  useEffect(() => {
-    setExpandedSections({});
-  }, [snapshotExpansionKey]);
-
   return (
     <aside className="workbench-side">
       <div className="panel-header">
@@ -307,11 +307,16 @@ export function RepoPanel({
                   {summarizedChanges.groups.map((group) =>
                     renderChangeGroup(
                       group,
-                      expandedSections[sectionKeyForGroup(group)] ?? false,
+                      expandedSections[
+                        expandedSectionKey(snapshotExpansionKey, sectionKeyForGroup(group))
+                      ] ?? false,
                       () =>
                         setExpandedSections((current) => ({
                           ...current,
-                          [sectionKeyForGroup(group)]: !(current[sectionKeyForGroup(group)] ?? false),
+                          [expandedSectionKey(snapshotExpansionKey, sectionKeyForGroup(group))]:
+                            !(current[
+                              expandedSectionKey(snapshotExpansionKey, sectionKeyForGroup(group))
+                            ] ?? false),
                         })),
                     ),
                   )}
@@ -319,21 +324,27 @@ export function RepoPanel({
                   summarizedChanges.fallback.hiddenCount > 0 ? (
                     <>
                       <ul className="repo-state-change-list repo-state-change-fallback">
-                        {(expandedSections.fallback
+                        {(expandedSections[expandedSectionKey(snapshotExpansionKey, "fallback")]
                           ? summarizedChanges.fallback.all
                           : summarizedChanges.fallback.visible
                         ).map((line) => (
                           <li key={line}>{line}</li>
                         ))}
                       </ul>
-                      {summarizedChanges.fallback.hiddenCount > 0 || expandedSections.fallback
+                      {summarizedChanges.fallback.hiddenCount > 0 ||
+                      expandedSections[expandedSectionKey(snapshotExpansionKey, "fallback")]
                         ? renderToggleButton(
-                            expandedSections.fallback ?? false,
+                            expandedSections[
+                              expandedSectionKey(snapshotExpansionKey, "fallback")
+                            ] ?? false,
                             summarizedChanges.fallback.hiddenCount,
                             () =>
                               setExpandedSections((current) => ({
                                 ...current,
-                                fallback: !(current.fallback ?? false),
+                                [expandedSectionKey(snapshotExpansionKey, "fallback")]:
+                                  !(current[
+                                    expandedSectionKey(snapshotExpansionKey, "fallback")
+                                  ] ?? false),
                               })),
                           )
                         : null}

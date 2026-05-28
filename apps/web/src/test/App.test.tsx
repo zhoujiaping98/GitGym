@@ -532,6 +532,70 @@ describe("App", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("reopens the scenario picker with the last manual scenario selection", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse({
+          templates: defaultCatalog.templates,
+          scenarios: [
+            {
+              id: 1,
+              key: "sandbox-standard",
+              name: "Standard Sandbox",
+              template_id: 1,
+            },
+            {
+              id: 2,
+              key: "sandbox-advanced",
+              name: "Advanced Sandbox",
+              template_id: 1,
+            },
+          ],
+        });
+      }
+
+      if (/\/api\/v1\/practice-sessions\/\d+\/repo-state$/.test(url)) {
+        return createJsonResponse(defaultRepoStatePayload);
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    await waitForNewSessionAction();
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    await waitForScenarioPicker();
+    const advancedOption = screen.getByRole("option", { name: /Advanced Sandbox/i });
+    fireEvent.click(advancedOption);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Choose a practice scenario" }),
+      ).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "New Session" }));
+
+    await waitForScenarioPicker();
+    expect(screen.getByRole("option", { name: /Advanced Sandbox/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
   it("renders the operational session card for an active session", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
