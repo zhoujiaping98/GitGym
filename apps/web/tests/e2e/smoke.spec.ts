@@ -193,6 +193,13 @@ test.describe("GitGym shell", () => {
     repoStateRequestCount = 0;
     repoStateDirty = false;
     await routeTerminalWebSocketToStub(page, terminalStub.port);
+    await page.route("**/api/v1/auth/me", async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "unauthorized" }),
+      });
+    });
     await page.route("**/api/v1/templates", async (route) => {
       await route.fulfill({
         status: 200,
@@ -253,6 +260,99 @@ test.describe("GitGym shell", () => {
       page.getByRole("link", { name: "Continue with GitHub" }),
     ).toBeVisible();
     await expect(page.getByText("Workbench preview")).toBeVisible();
+  });
+
+  test("shows the workspace unavailable recovery shell and reuses the shared scenario picker", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/practice-sessions/current", async (route) => {
+      await route.fulfill({
+        status: 410,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "workspace path is no longer available" }),
+      });
+    });
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("heading", { name: "Workspace unavailable" }),
+    ).toBeVisible();
+    await expect(page.getByText("workspace path is no longer available")).toBeVisible();
+
+    await page.getByRole("button", { name: "New Session" }).click();
+
+    await expect(
+      page.getByRole("dialog", { name: "Choose a practice scenario" }),
+    ).toBeVisible();
+  });
+
+  test("shows the catalog unavailable shell and retries the catalog request", async ({
+    page,
+  }) => {
+    let templatesCalls = 0;
+
+    await page.route("**/api/v1/practice-sessions/current", async (route) => {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "not found" }),
+      });
+    });
+    await page.route("**/api/v1/templates", async (route) => {
+      templatesCalls += 1;
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "catalog offline" }),
+      });
+    });
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("heading", { name: "Practice catalog unavailable" }),
+    ).toBeVisible();
+    await expect(page.getByText("catalog offline")).toBeVisible();
+
+    await page.getByRole("button", { name: "Try again" }).click();
+
+    await expect.poll(() => templatesCalls).toBeGreaterThan(1);
+    await expect(
+      page.getByRole("heading", { name: "Practice catalog unavailable" }),
+    ).toBeVisible();
+  });
+
+  test("shows the catalog empty shell when no scenarios are published", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/practice-sessions/current", async (route) => {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "not found" }),
+      });
+    });
+    await page.route("**/api/v1/templates", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          templates: [{ id: 1, key: "standard", name: "Standard" }],
+          scenarios: [],
+        }),
+      });
+    });
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("heading", { name: "Practice catalog empty" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Ask an administrator to publish at least one scenario before creating a session."),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "New Session" })).toHaveCount(0);
   });
 
   test("shows the live workbench when the current session exists", async ({
