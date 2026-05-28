@@ -474,6 +474,86 @@ func TestWorkspaceCleanupOperatorRouteIsNotMountedWithoutToken(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCleanupOperatorRequeueRoute(t *testing.T) {
+	t.Parallel()
+
+	t.Run("requeues an exhausted cleanup job", func(t *testing.T) {
+		recordingService := &stubPracticeService{
+			requeueExhaustedWorkspaceCleanupJobFunc: func(_ context.Context, jobID uint64) error {
+				if jobID != 7 {
+					t.Fatalf("expected requeue for job 7, got %d", jobID)
+				}
+				return nil
+			},
+		}
+		router := httpx.NewRouter(httpx.Dependencies{
+			PracticeService: recordingService,
+			AuthConfig: config.Config{
+				OperatorToken: "operator-secret",
+			},
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/operator/workspace-cleanup-jobs/7/requeue", nil)
+		req.Header.Set("Authorization", "Bearer operator-secret")
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("expected 202, got %d with body %s", rec.Code, rec.Body.String())
+		}
+		if recordingService.lastRequeueCleanupJobID != 7 {
+			t.Fatalf("expected recorded requeue id 7, got %d", recordingService.lastRequeueCleanupJobID)
+		}
+	})
+
+	t.Run("maps missing cleanup job to 404", func(t *testing.T) {
+		router := httpx.NewRouter(httpx.Dependencies{
+			PracticeService: &stubPracticeService{
+				requeueExhaustedWorkspaceCleanupJobFunc: func(context.Context, uint64) error {
+					return service.ErrWorkspaceCleanupJobNotFound
+				},
+			},
+			AuthConfig: config.Config{
+				OperatorToken: "operator-secret",
+			},
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/operator/workspace-cleanup-jobs/7/requeue", nil)
+		req.Header.Set("Authorization", "Bearer operator-secret")
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", rec.Code)
+		}
+	})
+
+	t.Run("maps non-exhausted cleanup job to 409", func(t *testing.T) {
+		router := httpx.NewRouter(httpx.Dependencies{
+			PracticeService: &stubPracticeService{
+				requeueExhaustedWorkspaceCleanupJobFunc: func(context.Context, uint64) error {
+					return service.ErrWorkspaceCleanupJobNotExhausted
+				},
+			},
+			AuthConfig: config.Config{
+				OperatorToken: "operator-secret",
+			},
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/operator/workspace-cleanup-jobs/7/requeue", nil)
+		req.Header.Set("Authorization", "Bearer operator-secret")
+		rec := httptest.NewRecorder()
+
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("expected 409, got %d", rec.Code)
+		}
+	})
+}
+
 func TestRouterUsesFallbackCatalogWhenNoCatalogStoreIsAvailable(t *testing.T) {
 	t.Parallel()
 
@@ -1019,22 +1099,24 @@ func TestResetPracticeSessionMapsErrors(t *testing.T) {
 }
 
 type stubPracticeService struct {
-	createPracticeSessionFunc             func(context.Context, service.CreatePracticeSessionInput) (domain.PracticeSession, error)
-	resetPracticeSessionFunc              func(context.Context, uint64, uint64) error
-	currentPracticeSessionFunc            func(context.Context, uint64) (domain.PracticeSession, error)
-	practiceSessionByIDFunc               func(context.Context, uint64, uint64) (domain.PracticeSession, error)
-	practiceSessionRepoStateFunc          func(context.Context, uint64, uint64) (runner.RepoState, error)
-	connectTerminalFunc                   func(context.Context, uint64, uint64) (runner.TerminalConnection, error)
-	expireStaleSessionsFunc               func(context.Context) (int, error)
-	reconcileCleanupJobsFunc              func(context.Context, int) (service.WorkspaceCleanupReconciliationSummary, error)
-	listExhaustedWorkspaceCleanupJobsFunc func(context.Context, int) ([]domain.WorkspaceCleanupJob, error)
-	listTemplatesResult                   []service.PracticeTemplate
-	listScenariosResult                   []service.PracticeScenario
-	listTemplatesErr                      error
-	listScenariosErr                      error
-	lastCreateInput                       service.CreatePracticeSessionInput
-	lastResetUserID                       uint64
-	lastResetSessionID                    uint64
+	createPracticeSessionFunc               func(context.Context, service.CreatePracticeSessionInput) (domain.PracticeSession, error)
+	resetPracticeSessionFunc                func(context.Context, uint64, uint64) error
+	currentPracticeSessionFunc              func(context.Context, uint64) (domain.PracticeSession, error)
+	practiceSessionByIDFunc                 func(context.Context, uint64, uint64) (domain.PracticeSession, error)
+	practiceSessionRepoStateFunc            func(context.Context, uint64, uint64) (runner.RepoState, error)
+	connectTerminalFunc                     func(context.Context, uint64, uint64) (runner.TerminalConnection, error)
+	expireStaleSessionsFunc                 func(context.Context) (int, error)
+	reconcileCleanupJobsFunc                func(context.Context, int) (service.WorkspaceCleanupReconciliationSummary, error)
+	listExhaustedWorkspaceCleanupJobsFunc   func(context.Context, int) ([]domain.WorkspaceCleanupJob, error)
+	requeueExhaustedWorkspaceCleanupJobFunc func(context.Context, uint64) error
+	listTemplatesResult                     []service.PracticeTemplate
+	listScenariosResult                     []service.PracticeScenario
+	listTemplatesErr                        error
+	listScenariosErr                        error
+	lastCreateInput                         service.CreatePracticeSessionInput
+	lastResetUserID                         uint64
+	lastResetSessionID                      uint64
+	lastRequeueCleanupJobID                 uint64
 }
 
 func (s *stubPracticeService) ListTemplates(context.Context) []service.PracticeTemplate {
@@ -1141,6 +1223,14 @@ func (s *stubPracticeService) ListExhaustedWorkspaceCleanupJobs(ctx context.Cont
 	return nil, nil
 }
 
+func (s *stubPracticeService) RequeueExhaustedWorkspaceCleanupJob(ctx context.Context, jobID uint64) error {
+	s.lastRequeueCleanupJobID = jobID
+	if s.requeueExhaustedWorkspaceCleanupJobFunc != nil {
+		return s.requeueExhaustedWorkspaceCleanupJobFunc(ctx, jobID)
+	}
+	return nil
+}
+
 func authStoreWithSession(rawToken string, userID uint64) *stubUserStore {
 	return &stubUserStore{
 		sessionByTokenHash: map[string]domain.BrowserSession{
@@ -1196,6 +1286,14 @@ func (s *persistentStubStore) ExpirePracticeSessions(ctx context.Context, before
 
 func (s *persistentStubStore) UpsertWorkspaceCleanupJob(ctx context.Context, job domain.WorkspaceCleanupJob) error {
 	return s.practiceSessions.UpsertWorkspaceCleanupJob(ctx, job)
+}
+
+func (s *persistentStubStore) WorkspaceCleanupJobByID(ctx context.Context, jobID uint64) (domain.WorkspaceCleanupJob, error) {
+	return s.practiceSessions.WorkspaceCleanupJobByID(ctx, jobID)
+}
+
+func (s *persistentStubStore) RequeueWorkspaceCleanupJob(ctx context.Context, jobID uint64, scheduledAt time.Time) error {
+	return s.practiceSessions.RequeueWorkspaceCleanupJob(ctx, jobID, scheduledAt)
 }
 
 func (s *persistentStubStore) ListPracticeSessionsMissingWorkspaceCleanupJob(ctx context.Context, limit int) ([]domain.PracticeSession, error) {

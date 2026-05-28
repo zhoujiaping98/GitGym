@@ -214,6 +214,22 @@ WHERE status = ?
 ORDER BY id ASC
 LIMIT ?
 `
+	workspaceCleanupJobByIDQuery = `
+SELECT
+  id,
+  practice_session_id,
+  workspace_id,
+  reason,
+  scheduled_at,
+  status,
+  attempt_count,
+  last_error,
+  created_at,
+  updated_at
+FROM workspace_cleanup_jobs
+WHERE id = ?
+LIMIT 1
+`
 )
 
 type MySQLStore struct {
@@ -668,6 +684,52 @@ func (s *MySQLStore) ListExhaustedWorkspaceCleanupJobs(ctx context.Context, limi
 	}
 
 	return jobs, nil
+}
+
+func (s *MySQLStore) WorkspaceCleanupJobByID(ctx context.Context, jobID uint64) (domain.WorkspaceCleanupJob, error) {
+	rows, err := s.db.QueryContext(ctx, workspaceCleanupJobByIDQuery, jobID)
+	if err != nil {
+		return domain.WorkspaceCleanupJob{}, fmt.Errorf("get workspace cleanup job by id: %w", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return domain.WorkspaceCleanupJob{}, fmt.Errorf("iterate workspace cleanup job by id: %w", err)
+		}
+		return domain.WorkspaceCleanupJob{}, service.ErrWorkspaceCleanupJobNotFound
+	}
+
+	job, err := scanWorkspaceCleanupJobRows(rows)
+	if err != nil {
+		return domain.WorkspaceCleanupJob{}, err
+	}
+	if err := rows.Err(); err != nil {
+		return domain.WorkspaceCleanupJob{}, fmt.Errorf("iterate workspace cleanup job by id: %w", err)
+	}
+
+	return job, nil
+}
+
+func (s *MySQLStore) RequeueWorkspaceCleanupJob(ctx context.Context, jobID uint64, scheduledAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE workspace_cleanup_jobs
+SET status = ?, attempt_count = 0, scheduled_at = ?, last_error = NULL, updated_at = CURRENT_TIMESTAMP(6)
+WHERE id = ?
+`, "pending", scheduledAt.UTC(), jobID)
+	if err != nil {
+		return fmt.Errorf("requeue workspace cleanup job: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected for requeue workspace cleanup job: %w", err)
+	}
+	if rowsAffected == 0 {
+		return service.ErrWorkspaceCleanupJobNotFound
+	}
+
+	return nil
 }
 
 func NormalizeMySQLDSN(dsn string) (string, error) {

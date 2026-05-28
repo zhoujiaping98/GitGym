@@ -157,6 +157,7 @@ func NewRouter(deps ...Dependencies) http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireOperatorToken(dependencies.AuthConfig.OperatorToken))
 				r.Get("/operator/workspace-cleanup-jobs/exhausted", handlers.ListExhaustedWorkspaceCleanupJobs(dependencies.PracticeService))
+				r.Post("/operator/workspace-cleanup-jobs/{jobId}/requeue", handlers.RequeueExhaustedWorkspaceCleanupJob(dependencies.PracticeService))
 			})
 		}
 

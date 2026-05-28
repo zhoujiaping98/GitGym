@@ -28,17 +28,19 @@ const (
 )
 
 var (
-	ErrInvalidPracticeSessionInput  = errors.New("invalid practice session input")
-	ErrUnknownPracticeScenario      = errors.New("unknown practice scenario")
-	ErrUnknownPracticeTemplate      = errors.New("unknown practice template")
-	ErrPracticeServiceConfiguration = errors.New("practice service configuration error")
-	ErrRunnerWorkspaceCreation      = errors.New("runner workspace creation failed")
-	ErrRunnerWorkspaceReset         = errors.New("runner workspace reset failed")
-	ErrRunnerRepoStateUnavailable   = errors.New("runner repository state unavailable")
-	ErrRunnerTerminalUnavailable    = errors.New("runner terminal unavailable")
-	ErrPracticeSessionNotFound      = errors.New("practice session not found")
-	ErrPracticeSessionExpired       = errors.New("practice session expired")
-	ErrPracticeSessionOrphaned      = errors.New("practice session workspace is unavailable")
+	ErrInvalidPracticeSessionInput     = errors.New("invalid practice session input")
+	ErrUnknownPracticeScenario         = errors.New("unknown practice scenario")
+	ErrUnknownPracticeTemplate         = errors.New("unknown practice template")
+	ErrPracticeServiceConfiguration    = errors.New("practice service configuration error")
+	ErrRunnerWorkspaceCreation         = errors.New("runner workspace creation failed")
+	ErrRunnerWorkspaceReset            = errors.New("runner workspace reset failed")
+	ErrRunnerRepoStateUnavailable      = errors.New("runner repository state unavailable")
+	ErrRunnerTerminalUnavailable       = errors.New("runner terminal unavailable")
+	ErrPracticeSessionNotFound         = errors.New("practice session not found")
+	ErrPracticeSessionExpired          = errors.New("practice session expired")
+	ErrPracticeSessionOrphaned         = errors.New("practice session workspace is unavailable")
+	ErrWorkspaceCleanupJobNotFound     = errors.New("workspace cleanup job not found")
+	ErrWorkspaceCleanupJobNotExhausted = errors.New("workspace cleanup job is not exhausted")
 )
 
 type PracticeTemplate struct {
@@ -75,6 +77,8 @@ type PracticeSessionStore interface {
 	ClaimDueWorkspaceCleanupJobs(ctx context.Context, now time.Time, limit int) ([]domain.WorkspaceCleanupJob, error)
 	MarkWorkspaceCleanupJobSucceeded(ctx context.Context, jobID uint64) error
 	MarkWorkspaceCleanupJobFailed(ctx context.Context, jobID uint64, scheduledAt time.Time, lastErr string) error
+	WorkspaceCleanupJobByID(ctx context.Context, jobID uint64) (domain.WorkspaceCleanupJob, error)
+	RequeueWorkspaceCleanupJob(ctx context.Context, jobID uint64, scheduledAt time.Time) error
 	ListPracticeSessionsMissingWorkspaceCleanupJob(ctx context.Context, limit int) ([]domain.PracticeSession, error)
 	ListExhaustedWorkspaceCleanupJobs(ctx context.Context, limit int) ([]domain.WorkspaceCleanupJob, error)
 }
@@ -94,6 +98,7 @@ type PracticeService interface {
 	RunWorkspaceCleanupDueJobs(ctx context.Context, limit int) error
 	ReconcileWorkspaceCleanupJobs(ctx context.Context, limit int) (WorkspaceCleanupReconciliationSummary, error)
 	ListExhaustedWorkspaceCleanupJobs(ctx context.Context, limit int) ([]domain.WorkspaceCleanupJob, error)
+	RequeueExhaustedWorkspaceCleanupJob(ctx context.Context, jobID uint64) error
 }
 
 type practiceService struct {
@@ -474,6 +479,29 @@ func (s *practiceService) ListExhaustedWorkspaceCleanupJobs(ctx context.Context,
 	}
 
 	return jobs, nil
+}
+
+func (s *practiceService) RequeueExhaustedWorkspaceCleanupJob(ctx context.Context, jobID uint64) error {
+	if s.store == nil {
+		return ErrWorkspaceCleanupJobNotFound
+	}
+	if jobID == 0 {
+		return ErrWorkspaceCleanupJobNotFound
+	}
+
+	job, err := s.store.WorkspaceCleanupJobByID(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if job.Status != "failed" || !workspaceCleanupAttemptsExhausted(job.AttemptCount) {
+		return ErrWorkspaceCleanupJobNotExhausted
+	}
+
+	if err := s.store.RequeueWorkspaceCleanupJob(ctx, jobID, s.now().UTC()); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *practiceService) markWorkspaceCleanupJobSucceeded(
@@ -860,6 +888,36 @@ func (s *InMemoryPracticeSessionStore) MarkWorkspaceCleanupJobFailed(_ context.C
 	job.Status = "failed"
 	job.ScheduledAt = scheduledAt.UTC()
 	job.LastError = lastErr
+	job.UpdatedAt = time.Now().UTC()
+	s.cleanupJobs[jobID] = job
+	return nil
+}
+
+func (s *InMemoryPracticeSessionStore) WorkspaceCleanupJobByID(_ context.Context, jobID uint64) (domain.WorkspaceCleanupJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, ok := s.cleanupJobs[jobID]
+	if !ok {
+		return domain.WorkspaceCleanupJob{}, ErrWorkspaceCleanupJobNotFound
+	}
+
+	return job, nil
+}
+
+func (s *InMemoryPracticeSessionStore) RequeueWorkspaceCleanupJob(_ context.Context, jobID uint64, scheduledAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, ok := s.cleanupJobs[jobID]
+	if !ok {
+		return ErrWorkspaceCleanupJobNotFound
+	}
+
+	job.Status = "pending"
+	job.AttemptCount = 0
+	job.LastError = ""
+	job.ScheduledAt = scheduledAt.UTC()
 	job.UpdatedAt = time.Now().UTC()
 	s.cleanupJobs[jobID] = job
 	return nil

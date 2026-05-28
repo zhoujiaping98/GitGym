@@ -567,6 +567,72 @@ func TestWorkspaceCleanupJobStoreListsExhaustedFailedJobs(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCleanupJobStoreRequeuesExhaustedFailedJob(t *testing.T) {
+	t.Parallel()
+
+	store := newTestMySQLStore(t)
+	sessionID := seedPracticeSession(t, store, seedPracticeSessionParams{
+		userID:     20,
+		scenarioID: 1,
+		templateID: 1,
+		runnerRef:  "ws-requeue-exhausted",
+		workspace:  "/tmp/ws-requeue-exhausted",
+		status:     "expired",
+	})
+	now := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
+	if err := store.UpsertWorkspaceCleanupJob(context.Background(), domain.WorkspaceCleanupJob{
+		PracticeSessionID: sessionID,
+		WorkspaceID:       "ws-requeue-exhausted",
+		Reason:            service.PracticeSessionStatusExpired,
+		ScheduledAt:       now,
+		Status:            "pending",
+	}); err != nil {
+		t.Fatalf("seed cleanup job: %v", err)
+	}
+	for attempt := uint32(1); attempt <= service.WorkspaceCleanupJobMaxAttempts; attempt++ {
+		claimed, err := store.ClaimDueWorkspaceCleanupJobs(context.Background(), now, 10)
+		if err != nil {
+			t.Fatalf("claim cleanup jobs on attempt %d: %v", attempt, err)
+		}
+		if len(claimed) != 1 {
+			t.Fatalf("expected one claimed job on attempt %d, got %d", attempt, len(claimed))
+		}
+		if err := store.MarkWorkspaceCleanupJobFailed(context.Background(), claimed[0].ID, now, "terminal failure"); err != nil {
+			t.Fatalf("mark cleanup job failed on attempt %d: %v", attempt, err)
+		}
+	}
+
+	exhaustedJobs, err := store.ListExhaustedWorkspaceCleanupJobs(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("list exhausted cleanup jobs: %v", err)
+	}
+	if len(exhaustedJobs) != 1 {
+		t.Fatalf("expected one exhausted cleanup job, got %d", len(exhaustedJobs))
+	}
+
+	requeueAt := now.Add(2 * time.Minute)
+	if err := store.RequeueWorkspaceCleanupJob(context.Background(), exhaustedJobs[0].ID, requeueAt); err != nil {
+		t.Fatalf("requeue exhausted cleanup job: %v", err)
+	}
+
+	job, err := store.WorkspaceCleanupJobByID(context.Background(), exhaustedJobs[0].ID)
+	if err != nil {
+		t.Fatalf("reload requeued cleanup job: %v", err)
+	}
+	if job.Status != "pending" {
+		t.Fatalf("expected requeued cleanup job status pending, got %q", job.Status)
+	}
+	if job.AttemptCount != 0 {
+		t.Fatalf("expected requeued cleanup job attempt_count 0, got %d", job.AttemptCount)
+	}
+	if job.LastError != "" {
+		t.Fatalf("expected requeued cleanup job last_error to be cleared, got %q", job.LastError)
+	}
+	if !job.ScheduledAt.Equal(requeueAt) {
+		t.Fatalf("expected requeued cleanup schedule %v, got %v", requeueAt, job.ScheduledAt)
+	}
+}
+
 type seedPracticeSessionParams struct {
 	userID     uint64
 	scenarioID uint64
