@@ -1019,7 +1019,7 @@ describe("App", () => {
     expect(within(sessionCard).getByText("!! ignored.tmp")).toBeInTheDocument();
   });
 
-  it("renders changed-file group counts and a summary row for long groups", async () => {
+  it("renders changed-file group counts and a show-more control for long groups", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
@@ -1063,10 +1063,10 @@ describe("App", () => {
     expect(within(sessionCard).getByText("two.txt")).toBeInTheDocument();
     expect(within(sessionCard).getByText("three.txt")).toBeInTheDocument();
     expect(within(sessionCard).queryByText("four.txt")).not.toBeInTheDocument();
-    expect(within(sessionCard).getByText("+1 more")).toBeInTheDocument();
+    expect(within(sessionCard).getByRole("button", { name: "Show 1 more" })).toBeInTheDocument();
   });
 
-  it("does not render a summary row when a group has exactly three entries", async () => {
+  it("does not render a show-more control when a group has exactly three entries", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
@@ -1109,7 +1109,7 @@ describe("App", () => {
     expect(within(sessionCard).queryByText(/\+\d+ more/)).not.toBeInTheDocument();
   });
 
-  it("truncates fallback raw rows with the same summary behavior", async () => {
+  it("truncates fallback raw rows with the same show-more behavior", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
       session: activeSession,
@@ -1152,7 +1152,179 @@ describe("App", () => {
     expect(within(sessionCard).getByText("!! two")).toBeInTheDocument();
     expect(within(sessionCard).getByText("!! three")).toBeInTheDocument();
     expect(within(sessionCard).queryByText("!! four")).not.toBeInTheDocument();
-    expect(within(sessionCard).getByText("+1 more")).toBeInTheDocument();
+    expect(within(sessionCard).getByRole("button", { name: "Show 1 more" })).toBeInTheDocument();
+  });
+
+  it("expands and collapses a grouped changed-file section", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse({
+          data: {
+            ...defaultRepoStatePayload.data,
+            dirty: true,
+            changed_files: ["M  one.txt", "M  two.txt", "M  three.txt", "M  four.txt"],
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    expect(screen.queryByText("four.txt")).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show 1 more" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("four.txt")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show less" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("four.txt")).not.toBeInTheDocument();
+    });
+  });
+
+  it("expands and collapses fallback raw rows", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse({
+          data: {
+            ...defaultRepoStatePayload.data,
+            dirty: true,
+            changed_files: ["!! one", "!! two", "!! three", "!! four"],
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    expect(screen.queryByText("!! four")).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show 1 more" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("!! four")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Show less" })).toBeInTheDocument();
+    });
+  });
+
+  it("resets expanded changed-file sections when a newer snapshot replaces the current one", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const initialTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [],
+    });
+    const completedCommandTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [{ id: "cmd-1", command: "git add .", phase: "stopped", exitCode: 0 }],
+    });
+
+    mockUseTerminalSession.mockReturnValue(initialTerminalState);
+
+    let repoStateRequestCount = 0;
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        return createJsonResponse({
+          data:
+            repoStateRequestCount === 1
+              ? {
+                  ...defaultRepoStatePayload.data,
+                  dirty: true,
+                  changed_files: ["M  one.txt", "M  two.txt", "M  three.txt", "M  four.txt"],
+                }
+              : {
+                  ...defaultRepoStatePayload.data,
+                  dirty: true,
+                  changed_files: ["M  one.txt", "M  two.txt", "M  three.txt", "M  five.txt"],
+                  captured_at: "2026-05-23T04:06:00.000Z",
+                },
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    const { rerender } = render(<App />);
+    await screen.findByLabelText("Operational session card");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show 1 more" }));
+    await waitFor(() => {
+      expect(screen.getByText("four.txt")).toBeInTheDocument();
+    });
+
+    mockUseTerminalSession.mockReturnValue(completedCommandTerminalState);
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Updated after git add .")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("five.txt")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show 1 more" })).toBeInTheDocument();
   });
 
   it("keeps the last snapshot visible and marks it stale when refresh fails", async () => {

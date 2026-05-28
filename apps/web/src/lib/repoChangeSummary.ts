@@ -5,11 +5,13 @@ const MAX_VISIBLE_REPO_CHANGES = 3;
 export type SummarizedRepoChangeGroup = {
   title: "Staged" | "Unstaged" | "Untracked";
   count: number;
+  all: RepoChangeEntry[];
   visible: RepoChangeEntry[];
   hiddenCount: number;
 };
 
 export type SummarizedFallbackRows = {
+  all: string[];
   visible: string[];
   hiddenCount: number;
 };
@@ -28,6 +30,7 @@ function summarizeEntries(entries: RepoChangeEntry[]) {
 
 function summarizeFallback(lines: string[]): SummarizedFallbackRows {
   return {
+    all: lines,
     visible: lines.slice(0, MAX_VISIBLE_REPO_CHANGES),
     hiddenCount: Math.max(lines.length - MAX_VISIBLE_REPO_CHANGES, 0),
   };
@@ -51,6 +54,7 @@ export function summarizeRepoChanges(groups: RepoChangeGroups): SummarizedRepoCh
         return {
           title: group.title,
           count: group.entries.length,
+          all: group.entries,
           visible: summarized.visible,
           hiddenCount: summarized.hiddenCount,
         };

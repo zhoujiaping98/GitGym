@@ -62,4 +62,40 @@ describe("summarizeRepoChanges", () => {
     expect(summary.fallback.visible).toEqual(["!! one", "!! two", "!! three"]);
     expect(summary.fallback.hiddenCount).toBe(1);
   });
+
+  it("keeps the full group entries available alongside the collapsed visible rows", () => {
+    const summary = summarizeRepoChanges(
+      groups({
+        unstaged: [
+          { key: "1", bucket: "unstaged", label: "Modified", path: "a.txt" },
+          { key: "2", bucket: "unstaged", label: "Modified", path: "b.txt" },
+          { key: "3", bucket: "unstaged", label: "Modified", path: "c.txt" },
+          { key: "4", bucket: "unstaged", label: "Modified", path: "d.txt" },
+        ],
+      }),
+    );
+
+    expect(summary.groups[0].visible.map((entry) => entry.path)).toEqual([
+      "a.txt",
+      "b.txt",
+      "c.txt",
+    ]);
+    expect(summary.groups[0].all.map((entry) => entry.path)).toEqual([
+      "a.txt",
+      "b.txt",
+      "c.txt",
+      "d.txt",
+    ]);
+  });
+
+  it("keeps the full fallback rows available alongside the collapsed visible rows", () => {
+    const summary = summarizeRepoChanges(
+      groups({
+        fallback: ["!! one", "!! two", "!! three", "!! four"],
+      }),
+    );
+
+    expect(summary.fallback.visible).toEqual(["!! one", "!! two", "!! three"]);
+    expect(summary.fallback.all).toEqual(["!! one", "!! two", "!! three", "!! four"]);
+  });
 });

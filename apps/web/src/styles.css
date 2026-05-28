@@ -652,6 +652,26 @@ a {
   padding-left: 1.1rem;
 }
 
+.repo-state-change-toggle {
+  width: fit-content;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: rgba(240, 246, 255, 0.78);
+  font-family: "Consolas", "SFMono-Regular", "Liberation Mono", monospace;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.repo-state-change-toggle:hover {
+  color: rgba(240, 246, 255, 0.94);
+}
+
+.repo-state-change-toggle:focus-visible {
+  outline: 2px solid rgba(121, 255, 177, 0.8);
+  outline-offset: 3px;
+}
+
 .repo-state-change-more {
   color: rgba(240, 246, 255, 0.58);
   font-family: "Sora", "Inter", sans-serif;
