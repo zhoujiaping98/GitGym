@@ -102,6 +102,14 @@ function repoAttributionCopy(attribution: RepoAttribution | null) {
   return null;
 }
 
+function repoFreshnessCopy(capturedAt: string | null) {
+  if (!capturedAt) {
+    return null;
+  }
+
+  return `Captured ${formatDate(capturedAt)}`;
+}
+
 function renderChangeGroup(group: SummarizedRepoChangeGroup) {
   return (
     <section className="repo-state-change-group" aria-label={group.title} key={group.title}>
@@ -153,6 +161,10 @@ export function RepoPanel({
   const healthLabel = getHealthLabel(terminalStatus, session.status);
   const healthTone = getHealthTone(terminalStatus, session.status);
   const attributionCopy = repoAttributionCopy(repoAttribution);
+  const freshnessCopy =
+    repoState.status === "ready" || repoState.status === "stale"
+      ? repoFreshnessCopy(repoState.snapshot.capturedAt)
+      : null;
   const lifecycleFacts = [
     { label: "Started", value: formatDate(session.startedAt) },
     { label: "Last activity", value: formatDate(session.lastActivityAt) },
@@ -212,6 +224,7 @@ export function RepoPanel({
             {attributionCopy ? (
               <span className="repo-state-inline-note">{attributionCopy}</span>
             ) : null}
+            {freshnessCopy ? <span className="repo-state-inline-note">{freshnessCopy}</span> : null}
           </div>
           {repoState.status === "ready" || repoState.status === "stale" ? (
             <>

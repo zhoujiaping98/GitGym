@@ -558,6 +558,44 @@ describe("App", () => {
     expect(within(sessionCard).getByText("main")).toBeInTheDocument();
   });
 
+  it("renders freshness copy for the initial repo snapshot load", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        history: [],
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createJsonResponse(defaultRepoStatePayload);
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    const sessionCard = await screen.findByLabelText("Operational session card");
+    expect(await within(sessionCard).findByText("Snapshot loaded")).toBeInTheDocument();
+    expect(within(sessionCard).getByText("Captured May 23, 12:00 PM")).toBeInTheDocument();
+  });
+
   it("refreshes repo snapshot when the same session id is reconciled with a new session object", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
@@ -1180,6 +1218,69 @@ describe("App", () => {
     expect(screen.getByText("main")).toBeInTheDocument();
   });
 
+  it("keeps rendering the last captured timestamp when the repo snapshot becomes stale", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const initialTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [],
+    });
+    const completedCommandTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [
+        {
+          id: "cmd-2",
+          command: "git status",
+          phase: "stopped",
+          executedAt: "2026-05-23T04:03:00.000Z",
+          exitCode: 0,
+        },
+      ],
+    });
+
+    mockUseTerminalSession.mockReturnValue(initialTerminalState);
+
+    let repoStateRequestCount = 0;
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        return repoStateRequestCount === 1
+          ? createJsonResponse(defaultRepoStatePayload)
+          : createErrorResponse(502, "Unable to load repository state.");
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    const { rerender } = render(<App />);
+    const sessionCard = await screen.findByLabelText("Operational session card");
+    expect(await within(sessionCard).findByText("Captured May 23, 12:00 PM")).toBeInTheDocument();
+
+    mockUseTerminalSession.mockReturnValue(completedCommandTerminalState);
+    rerender(<App />);
+
+    await waitFor(() =>
+      expect(
+        within(sessionCard).getByText("Repository state may be out of date."),
+      ).toBeInTheDocument(),
+    );
+    expect(within(sessionCard).getByText("Captured May 23, 12:00 PM")).toBeInTheDocument();
+  });
+
   it("refreshes repo state after reconnect when the same command id appears after history reset", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
@@ -1544,6 +1645,76 @@ describe("App", () => {
       expect(screen.getByText("Updated after git add .")).toBeInTheDocument(),
     );
     expect(screen.getByText("notes.txt")).toBeInTheDocument();
+  });
+
+  it("updates freshness copy when a command-triggered refresh returns a newer snapshot", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const initialTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [],
+    });
+    const completedCommandTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [
+        {
+          id: "cmd-1",
+          command: "git add .",
+          phase: "stopped",
+          executedAt: "2026-05-23T04:01:30.000Z",
+          exitCode: 0,
+        },
+      ],
+    });
+
+    mockUseTerminalSession.mockReturnValue(initialTerminalState);
+
+    let repoStateRequestCount = 0;
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        return createJsonResponse(
+          repoStateRequestCount === 1
+            ? defaultRepoStatePayload
+            : {
+                data: {
+                  ...defaultRepoStatePayload.data,
+                  dirty: true,
+                  changed_files: ["M notes.txt"],
+                  captured_at: "2026-05-23T04:02:00.000Z",
+                },
+              },
+        );
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    const { rerender } = render(<App />);
+    const sessionCard = await screen.findByLabelText("Operational session card");
+    expect(await within(sessionCard).findByText("Captured May 23, 12:00 PM")).toBeInTheDocument();
+
+    mockUseTerminalSession.mockReturnValue(completedCommandTerminalState);
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(within(sessionCard).getByText("Updated after git add .")).toBeInTheDocument();
+    });
+    expect(within(sessionCard).getByText("Captured May 23, 12:02 PM")).toBeInTheDocument();
   });
 
   it("preserves the last successful attribution when a command-triggered refresh fails", async () => {
