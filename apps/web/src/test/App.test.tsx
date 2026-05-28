@@ -275,6 +275,7 @@ async function confirmScenarioPicker() {
 }
 
 beforeEach(() => {
+  window.history.replaceState({}, "", "/");
   mockUseCurrentSession.mockReset();
   mockUseCurrentUser.mockReset();
   mockUseTerminalSession.mockReset();
@@ -377,6 +378,18 @@ describe("App", () => {
     expect(
       screen.queryByRole("button", { name: "New Session" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders an oauth failure callout on the login screen when the callback returns an error code", () => {
+    window.history.replaceState({}, "", "/?oauth_error=oauth_exchange_failed");
+
+    render(<App />);
+
+    expect(screen.getByText("GitHub sign-in did not complete")).toBeInTheDocument();
+    expect(
+      screen.getByText("GitHub could not finish the sign-in handshake. Try again in a moment."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Continue with GitHub" })).toBeInTheDocument();
   });
 
   it("renders the current user in the top bar when auth identity is available", () => {

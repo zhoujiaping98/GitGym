@@ -55,6 +55,11 @@ type CatalogState =
 
 type ScenarioPickerSource = "topbar" | "empty" | "orphaned";
 
+type AuthFailureContent = {
+  title: string;
+  body: string;
+};
+
 type ScenarioPickerState =
   | { status: "closed" }
   | {
@@ -98,6 +103,45 @@ function isLifecycleRepoRefreshTrigger(trigger: RepoRefreshContext["trigger"]) {
   return trigger === "session_create" || trigger === "session_reset" || trigger === "session_sync";
 }
 
+function getAuthFailureContent(search: string): AuthFailureContent | null {
+  const oauthError = new URLSearchParams(search).get("oauth_error");
+
+  switch (oauthError) {
+    case "oauth_unavailable":
+      return {
+        title: "GitHub sign-in is unavailable",
+        body: "GitGym could not start the GitHub sign-in flow right now. Try again in a moment.",
+      };
+    case "oauth_state_invalid":
+      return {
+        title: "GitHub sign-in expired",
+        body: "The GitHub sign-in return could not be verified. Start the sign-in flow again.",
+      };
+    case "oauth_code_missing":
+      return {
+        title: "GitHub sign-in was interrupted",
+        body: "GitHub did not return a usable sign-in code. Start the sign-in flow again.",
+      };
+    case "oauth_exchange_failed":
+      return {
+        title: "GitHub sign-in did not complete",
+        body: "GitHub could not finish the sign-in handshake. Try again in a moment.",
+      };
+    case "oauth_profile_failed":
+      return {
+        title: "GitHub account details could not be loaded",
+        body: "GitGym could not finish loading your GitHub identity. Try the sign-in flow again.",
+      };
+    case "oauth_session_failed":
+      return {
+        title: "GitGym could not finish signing you in",
+        body: "Your GitHub account was accepted, but GitGym could not finish creating the browser session.",
+      };
+    default:
+      return null;
+  }
+}
+
 export default function App() {
   const currentSession = useCurrentSession();
   const currentUser = useCurrentUser();
@@ -129,6 +173,7 @@ export default function App() {
   const previousCompletedCountRef = useRef(0);
   const effectiveSession = signedOutOverride ? null : currentSession.session;
   const topBarCurrentUser = signedOutOverride ? null : currentUser.user;
+  const loginAuthError = getAuthFailureContent(window.location.search);
   const hasSessionOverride = sessionOverride !== undefined;
   const displayedSession = hasSessionOverride ? sessionOverride : effectiveSession;
   const terminalSession = useTerminalSession(displayedSession);
@@ -811,7 +856,7 @@ export default function App() {
           }}
         />
       ) : (
-        <LoginScreen preview={<Workbench preview />} />
+        <LoginScreen authError={loginAuthError} preview={<Workbench preview />} />
       )}
       <ScenarioPickerModal
         body="Pick a sandbox before creating the next session."

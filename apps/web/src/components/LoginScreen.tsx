@@ -1,10 +1,16 @@
 import type { ReactNode } from "react";
 
+type LoginScreenAuthError = {
+  title: string;
+  body: string;
+};
+
 type LoginScreenProps = {
+  authError?: LoginScreenAuthError | null;
   preview: ReactNode;
 };
 
-export function LoginScreen({ preview }: LoginScreenProps) {
+export function LoginScreen({ authError = null, preview }: LoginScreenProps) {
   return (
     <main className="login-screen">
       <section className="login-copy">
@@ -19,6 +25,12 @@ export function LoginScreen({ preview }: LoginScreenProps) {
           <span>Real Git</span>
           <span>Reset in seconds</span>
         </div>
+        {authError ? (
+          <section className="login-auth-error" aria-label="GitHub sign-in failure">
+            <strong>{authError.title}</strong>
+            <p>{authError.body}</p>
+          </section>
+        ) : null}
         <a className="primary-button" href="/api/v1/auth/github/login">
           Continue with GitHub
         </a>

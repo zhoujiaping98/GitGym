@@ -100,15 +100,15 @@ func TestGitHubLoginReturnsServerErrorWhenAuthStoreUnavailable(t *testing.T) {
 			GitHubClientID:      "client-id",
 			GitHubSecret:        "client-secret",
 			APIBaseURL:          "http://127.0.0.1:8080",
-			FrontendRedirectURL: "http://127.0.0.1:5173",
+			FrontendRedirectURL: "http://127.0.0.1:5173/app",
 		},
 	}).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d", rec.Code)
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307, got %d", rec.Code)
 	}
-	if rec.Header().Get("Location") != "" {
-		t.Fatalf("expected no redirect location, got %q", rec.Header().Get("Location"))
+	if rec.Header().Get("Location") != "http://127.0.0.1:5173/app?oauth_error=oauth_unavailable" {
+		t.Fatalf("expected frontend oauth error redirect, got %q", rec.Header().Get("Location"))
 	}
 	if len(rec.Result().Cookies()) != 0 {
 		t.Fatalf("expected no cookies to be set on preflight failure, got %#v", rec.Result().Cookies())
@@ -293,15 +293,15 @@ func TestGitHubLoginReturnsServerErrorWhenOAuthConfigIncomplete(t *testing.T) {
 	httpx.NewRouter(httpx.Dependencies{
 		AuthConfig: config.Config{
 			APIBaseURL:          "http://127.0.0.1:8080",
-			FrontendRedirectURL: "http://127.0.0.1:5173",
+			FrontendRedirectURL: "http://127.0.0.1:5173/app",
 		},
 	}).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d", rec.Code)
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "not configured") {
-		t.Fatalf("expected clear configuration error, got %q", rec.Body.String())
+	if rec.Header().Get("Location") != "http://127.0.0.1:5173/app?oauth_error=oauth_unavailable" {
+		t.Fatalf("expected frontend oauth error redirect, got %q", rec.Header().Get("Location"))
 	}
 }
 
@@ -336,12 +336,15 @@ func TestGitHubCallbackRejectsMissingState(t *testing.T) {
 			GitHubClientID:      "client-id",
 			GitHubSecret:        "client-secret",
 			APIBaseURL:          "http://127.0.0.1:8080",
-			FrontendRedirectURL: "http://127.0.0.1:5173",
+			FrontendRedirectURL: "http://127.0.0.1:5173/app",
 		},
 	}).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307, got %d", rec.Code)
+	}
+	if rec.Header().Get("Location") != "http://127.0.0.1:5173/app?oauth_error=oauth_state_invalid" {
+		t.Fatalf("expected frontend oauth error redirect, got %q", rec.Header().Get("Location"))
 	}
 }
 
@@ -354,15 +357,59 @@ func TestGitHubCallbackReturnsServerErrorWhenOAuthConfigIncomplete(t *testing.T)
 		AuthStore: &stubUserStore{},
 		AuthConfig: config.Config{
 			APIBaseURL:          "http://127.0.0.1:8080",
-			FrontendRedirectURL: "http://127.0.0.1:5173",
+			FrontendRedirectURL: "http://127.0.0.1:5173/app",
 		},
 	}).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d", rec.Code)
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "not configured") {
-		t.Fatalf("expected clear configuration error, got %q", rec.Body.String())
+	if rec.Header().Get("Location") != "http://127.0.0.1:5173/app?oauth_error=oauth_unavailable" {
+		t.Fatalf("expected frontend oauth error redirect, got %q", rec.Header().Get("Location"))
+	}
+}
+
+func TestGitHubCallbackRedirectsToFrontendWhenGitHubExchangeFails(t *testing.T) {
+	oauthClient := &stubGitHubOAuthClient{
+		exchangeCodeFunc: func(code string) (string, error) {
+			if code != "abc123" {
+				t.Fatalf("expected callback code abc123, got %q", code)
+			}
+			return "", errors.New("github down")
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/github/callback?code=abc123&state=expected-state", nil)
+	req.AddCookie(&http.Cookie{Name: "gitgym_oauth_state", Value: "expected-state"})
+	rec := httptest.NewRecorder()
+
+	httpx.NewRouter(httpx.Dependencies{
+		AuthStore:         &stubUserStore{},
+		GitHubOAuthClient: oauthClient,
+		AuthConfig: config.Config{
+			GitHubClientID:      "client-id",
+			GitHubSecret:        "client-secret",
+			APIBaseURL:          "http://127.0.0.1:8080",
+			FrontendRedirectURL: "http://127.0.0.1:5173/app",
+		},
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307, got %d", rec.Code)
+	}
+	if rec.Header().Get("Location") != "http://127.0.0.1:5173/app?oauth_error=oauth_exchange_failed" {
+		t.Fatalf("expected frontend oauth error redirect, got %q", rec.Header().Get("Location"))
+	}
+
+	var clearedStateCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "gitgym_oauth_state" {
+			clearedStateCookie = cookie
+			break
+		}
+	}
+	if clearedStateCookie == nil || clearedStateCookie.MaxAge >= 0 {
+		t.Fatalf("expected oauth state cookie to be cleared, got %#v", clearedStateCookie)
 	}
 }
 

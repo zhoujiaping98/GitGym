@@ -3,6 +3,7 @@ package handlers
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"gitgym/services/api/internal/http/middleware"
@@ -13,11 +14,15 @@ import (
 const (
 	oauthStateCookieName     = "gitgym_oauth_state"
 	browserSessionCookieName = "gitgym_session"
+	oauthErrorQueryKey       = "oauth_error"
 )
 
 func GitHubLoginWithReadiness(gitHubOAuthClient oauth.GitHubOAuthClient, authStore service.UserStore, frontendRedirectURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := requireOAuthFlowReady(gitHubOAuthClient, authStore, frontendRedirectURL); err != nil {
+			if redirectToOAuthFailure(w, r, frontendRedirectURL, "oauth_unavailable", false) {
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -36,53 +41,56 @@ func GitHubLoginWithReadiness(gitHubOAuthClient oauth.GitHubOAuthClient, authSto
 func GitHubCallback(gitHubOAuthClient oauth.GitHubOAuthClient, authStore service.UserStore, frontendRedirectURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := requireOAuthFlowReady(gitHubOAuthClient, authStore, frontendRedirectURL); err != nil {
+			if redirectToOAuthFailure(w, r, frontendRedirectURL, "oauth_unavailable", true) {
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		stateCookie, err := r.Cookie(oauthStateCookieName)
 		if err != nil || stateCookie.Value == "" || r.URL.Query().Get("state") != stateCookie.Value {
-			http.Error(w, "invalid oauth state", http.StatusBadRequest)
+			redirectToOAuthFailure(w, r, frontendRedirectURL, "oauth_state_invalid", true)
 			return
 		}
 
 		code := strings.TrimSpace(r.URL.Query().Get("code"))
 		if code == "" {
-			http.Error(w, "missing oauth code", http.StatusBadRequest)
+			redirectToOAuthFailure(w, r, frontendRedirectURL, "oauth_code_missing", true)
 			return
 		}
 
 		accessToken, err := gitHubOAuthClient.ExchangeCode(r.Context(), code)
 		if err != nil {
-			http.Error(w, "github oauth exchange failed", http.StatusBadGateway)
+			redirectToOAuthFailure(w, r, frontendRedirectURL, "oauth_exchange_failed", true)
 			return
 		}
 
 		profile, err := gitHubOAuthClient.FetchProfile(r.Context(), accessToken)
 		if err != nil {
-			http.Error(w, "github profile fetch failed", http.StatusBadGateway)
+			redirectToOAuthFailure(w, r, frontendRedirectURL, "oauth_profile_failed", true)
 			return
 		}
 
 		if _, err := authStore.UpsertGitHubUser(r.Context(), profile); err != nil {
-			http.Error(w, "failed to upsert user", http.StatusInternalServerError)
+			redirectToOAuthFailure(w, r, frontendRedirectURL, "oauth_session_failed", true)
 			return
 		}
 
 		user, err := authStore.GetUserByGitHubID(r.Context(), profile.ID)
 		if err != nil {
-			http.Error(w, "failed to load user", http.StatusInternalServerError)
+			redirectToOAuthFailure(w, r, frontendRedirectURL, "oauth_session_failed", true)
 			return
 		}
 
 		rawToken, err := service.NewSessionToken()
 		if err != nil {
-			http.Error(w, "failed to create session token", http.StatusInternalServerError)
+			redirectToOAuthFailure(w, r, frontendRedirectURL, "oauth_session_failed", true)
 			return
 		}
 
 		if err := authStore.CreateBrowserSession(r.Context(), user.ID, service.HashSessionToken(rawToken), r.UserAgent(), clientIP(r)); err != nil {
-			http.Error(w, "failed to create browser session", http.StatusInternalServerError)
+			redirectToOAuthFailure(w, r, frontendRedirectURL, "oauth_session_failed", true)
 			return
 		}
 
@@ -91,6 +99,36 @@ func GitHubCallback(gitHubOAuthClient oauth.GitHubOAuthClient, authStore service
 		clearOAuthStateCookie(w, secureCookies)
 		http.Redirect(w, r, frontendRedirectURL, http.StatusTemporaryRedirect)
 	}
+}
+
+func redirectToOAuthFailure(w http.ResponseWriter, r *http.Request, frontendRedirectURL string, code string, clearState bool) bool {
+	redirectURL, err := oauthFailureRedirectURL(frontendRedirectURL, code)
+	if err != nil {
+		return false
+	}
+
+	if clearState {
+		clearOAuthStateCookie(w, shouldUseSecureCookies(r))
+	}
+
+	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+	return true
+}
+
+func oauthFailureRedirectURL(frontendRedirectURL string, code string) (string, error) {
+	if strings.TrimSpace(frontendRedirectURL) == "" || strings.TrimSpace(code) == "" {
+		return "", errString("frontend redirect is not configured")
+	}
+
+	redirectURL, err := url.Parse(frontendRedirectURL)
+	if err != nil {
+		return "", err
+	}
+
+	query := redirectURL.Query()
+	query.Set(oauthErrorQueryKey, code)
+	redirectURL.RawQuery = query.Encode()
+	return redirectURL.String(), nil
 }
 
 func AuthMe(authStore service.UserStore) http.HandlerFunc {
