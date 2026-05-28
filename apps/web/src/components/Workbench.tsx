@@ -17,6 +17,8 @@ type WorkbenchProps = {
   repoState?: RepoStateView;
   repoAttribution?: RepoAttribution | null;
   repoOutcome?: string | null;
+  retryRepoState?: (() => void) | null;
+  isRefreshingRepoState?: boolean;
 };
 
 const previewTerminal: TerminalSessionState = {
@@ -39,6 +41,8 @@ export function Workbench({
   repoState = { status: "idle", snapshot: null, error: null },
   repoAttribution = null,
   repoOutcome = null,
+  retryRepoState = null,
+  isRefreshingRepoState = false,
 }: WorkbenchProps) {
   const shellClassName = preview
     ? "workbench-shell workbench-shell-preview"
@@ -61,6 +65,8 @@ export function Workbench({
         repoState={repoState}
         repoAttribution={repoAttribution}
         repoOutcome={repoOutcome}
+        retryRepoState={retryRepoState}
+        isRefreshingRepoState={isRefreshingRepoState}
       />
       <CommandHistoryPanel preview={preview} terminal={terminal} />
     </section>

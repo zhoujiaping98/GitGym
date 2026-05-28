@@ -1281,6 +1281,192 @@ describe("App", () => {
     expect(within(sessionCard).getByText("Captured May 23, 12:00 PM")).toBeInTheDocument();
   });
 
+  it("retries an unavailable repo snapshot from the card", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        history: [],
+      }),
+    );
+
+    let repoStateRequestCount = 0;
+    let releaseRetry: (() => void) | null = null;
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        if (repoStateRequestCount === 1) {
+          return createErrorResponse(502, "Unable to load repository state.");
+        }
+
+        return new Promise<Response>((resolve) => {
+          releaseRetry = () => resolve(createJsonResponse(defaultRepoStatePayload));
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText("Repository state unavailable.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry repository state" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Refreshing repository state...")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "Retry repository state" })).toBeDisabled();
+
+    releaseRetry?.();
+
+    await waitFor(() => {
+      expect(screen.getByText("main")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Repository state unavailable.")).not.toBeInTheDocument();
+  });
+
+  it("retries a stale repo snapshot without clearing the last visible snapshot", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const initialTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [],
+    });
+    const completedCommandTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [{ id: "cmd-2", command: "git status", phase: "stopped", exitCode: 0 }],
+    });
+
+    mockUseTerminalSession.mockReturnValue(initialTerminalState);
+
+    let repoStateRequestCount = 0;
+    let releaseRetry: (() => void) | null = null;
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        if (repoStateRequestCount === 1) {
+          return createJsonResponse(defaultRepoStatePayload);
+        }
+        if (repoStateRequestCount === 2) {
+          return createErrorResponse(502, "Unable to load repository state.");
+        }
+
+        return new Promise<Response>((resolve) => {
+          releaseRetry = () =>
+            resolve(
+              createJsonResponse({
+                data: {
+                  ...defaultRepoStatePayload.data,
+                  dirty: true,
+                  changed_files: ["?? notes.txt"],
+                  captured_at: "2026-05-23T04:04:00.000Z",
+                },
+              }),
+            );
+        });
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    const { rerender } = render(<App />);
+    const sessionCard = await screen.findByLabelText("Operational session card");
+
+    mockUseTerminalSession.mockReturnValue(completedCommandTerminalState);
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(within(sessionCard).getByText("Repository state may be out of date.")).toBeInTheDocument();
+    });
+    expect(within(sessionCard).getByText("main")).toBeInTheDocument();
+
+    fireEvent.click(within(sessionCard).getByRole("button", { name: "Retry repository state" }));
+
+    await waitFor(() => {
+      expect(within(sessionCard).getByText("Refreshing repository state...")).toBeInTheDocument();
+    });
+    expect(within(sessionCard).getByText("main")).toBeInTheDocument();
+
+    releaseRetry?.();
+
+    await waitFor(() => {
+      expect(within(sessionCard).getByText("Dirty")).toBeInTheDocument();
+    });
+    expect(within(sessionCard).queryByText("Repository state may be out of date.")).not.toBeInTheDocument();
+  });
+
+  it("keeps the repo retry action available after a failed manual retry", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    mockUseTerminalSession.mockReturnValue(
+      createTerminalState({
+        status: "ready",
+        terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+        history: [],
+      }),
+    );
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        return createErrorResponse(502, "Unable to load repository state.");
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText("Repository state unavailable.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry repository state" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Retry repository state" })).toBeEnabled();
+    });
+    expect(screen.getByText("Repository state unavailable.")).toBeInTheDocument();
+  });
+
   it("renders a command outcome when the working tree becomes dirty", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",

@@ -20,6 +20,8 @@ type RepoPanelProps = {
   repoState?: RepoStateView;
   repoAttribution?: RepoAttribution | null;
   repoOutcome?: string | null;
+  retryRepoState?: (() => void) | null;
+  isRefreshingRepoState?: boolean;
 };
 
 function formatDate(value: string) {
@@ -139,6 +141,8 @@ export function RepoPanel({
   repoState = { status: "idle", snapshot: null, error: null },
   repoAttribution = null,
   repoOutcome = null,
+  retryRepoState = null,
+  isRefreshingRepoState = false,
 }: RepoPanelProps) {
   if (preview || !session) {
     return (
@@ -177,6 +181,11 @@ export function RepoPanel({
     repoState.status === "ready" || repoState.status === "stale"
       ? summarizeRepoChanges(groupRepoChanges(repoState.snapshot.changedFiles))
       : null;
+  const showRetryRepoState =
+    retryRepoState !== null &&
+    (isRefreshingRepoState ||
+      repoState.status === "error" ||
+      (repoState.status === "stale" && repoState.error !== null));
 
   return (
     <aside className="workbench-side">
@@ -217,7 +226,9 @@ export function RepoPanel({
         <section className="repo-state-snapshot-shell" aria-label="Repository snapshot">
           <div className="repo-state-snapshot-header">
             <strong>Repository snapshot</strong>
-            {repoState.status === "loading" ? (
+            {isRefreshingRepoState ? (
+              <span className="repo-state-inline-note">Refreshing repository state...</span>
+            ) : repoState.status === "loading" ? (
               <span className="repo-state-inline-note">Loading repository state...</span>
             ) : null}
             {repoState.status === "error" ? (
@@ -232,7 +243,20 @@ export function RepoPanel({
           {repoState.status === "ready" || repoState.status === "stale" ? (
             <>
               {repoState.status === "stale" && repoState.error ? (
-                <span className="repo-state-inline-note">Repository state may be out of date.</span>
+                <div className="repo-state-inline-actions">
+                  <span className="repo-state-inline-note">Repository state may be out of date.</span>
+                  {showRetryRepoState ? (
+                    <button
+                      aria-label="Retry repository state"
+                      className="top-bar-button"
+                      disabled={isRefreshingRepoState}
+                      onClick={retryRepoState}
+                      type="button"
+                    >
+                      Retry
+                    </button>
+                  ) : null}
+                </div>
               ) : null}
               <dl className="repo-state-snapshot">
                 <div>
@@ -269,6 +293,18 @@ export function RepoPanel({
                 </section>
               ) : null}
             </>
+          ) : showRetryRepoState ? (
+            <div className="repo-state-inline-actions">
+              <button
+                aria-label="Retry repository state"
+                className="top-bar-button"
+                disabled={isRefreshingRepoState}
+                onClick={retryRepoState}
+                type="button"
+              >
+                Retry
+              </button>
+            </div>
           ) : null}
         </section>
       </section>

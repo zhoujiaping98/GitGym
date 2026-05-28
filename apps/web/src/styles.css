@@ -590,6 +590,13 @@ a {
   line-height: 1.5;
 }
 
+.repo-state-inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
 .repo-state-changes {
   display: grid;
   gap: 0.75rem;

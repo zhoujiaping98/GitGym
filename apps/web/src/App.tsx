@@ -188,7 +188,13 @@ export default function App() {
     displayedSession && catalog
       ? catalog.templates.find((entry) => entry.id === displayedSession.templateId) ?? null
       : null;
-  const { repoState, repoAttribution, repoOutcome } = useRepoState({
+  const {
+    repoState,
+    repoAttribution,
+    repoOutcome,
+    retryRepoState,
+    isRefreshingRepoState,
+  } = useRepoState({
     session: displayedSession,
     commandHistory: terminalSession.history,
     refreshContext: repoRefreshContext,
@@ -713,6 +719,8 @@ export default function App() {
             repoState={repoState}
             repoAttribution={repoAttribution}
             repoOutcome={repoOutcome}
+            retryRepoState={retryRepoState}
+            isRefreshingRepoState={isRefreshingRepoState}
           />
         </main>
       ) : currentSession.status === "loading" ? (

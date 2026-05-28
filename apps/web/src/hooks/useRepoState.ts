@@ -26,6 +26,8 @@ type UseRepoStateResult = {
   repoState: RepoStateView;
   repoAttribution: RepoAttribution | null;
   repoOutcome: string | null;
+  retryRepoState: (() => void) | null;
+  isRefreshingRepoState: boolean;
 };
 
 function getRepoStateError(error: unknown) {
@@ -40,6 +42,7 @@ export function useRepoState({
   const [state, setState] = useState<RepoStateView>(idleState);
   const [attribution, setAttribution] = useState<RepoAttribution | null>(null);
   const [outcome, setOutcome] = useState<string | null>(null);
+  const [isRefreshingRepoState, setIsRefreshingRepoState] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const lastCompletedCommandKeyRef = useRef<string | null>(null);
   const lastSessionIdRef = useRef<number | null>(null);
@@ -62,6 +65,7 @@ export function useRepoState({
       setState(idleState);
       setAttribution(null);
       setOutcome(null);
+      setIsRefreshingRepoState(false);
       return;
     }
 
@@ -72,13 +76,14 @@ export function useRepoState({
       lastSuccessfulSnapshotRef.current = null;
       setAttribution(null);
       setOutcome(null);
+      setIsRefreshingRepoState(false);
     }
     setState((current) =>
       isSameSession && current.snapshot
         ? {
             status: "stale",
             snapshot: current.snapshot,
-            error: null,
+            error: current.error,
           }
         : {
             status: "loading",
@@ -89,6 +94,7 @@ export function useRepoState({
 
     void fetchPracticeRepoState(session.id, controller.signal)
       .then((snapshot) => {
+        setIsRefreshingRepoState(false);
         const previousSnapshot = lastSuccessfulSnapshotRef.current;
         lastSuccessfulSnapshotRef.current = snapshot;
         setState({
@@ -114,6 +120,7 @@ export function useRepoState({
           return;
         }
 
+        setIsRefreshingRepoState(false);
         const message = getRepoStateError(error);
         setState((current) =>
           current.snapshot
@@ -165,9 +172,18 @@ export function useRepoState({
     setRefreshToken((value) => value + 1);
   }, [commandHistory.length, completedCommandCount, latestCompletedCommandKey, session]);
 
+  const retryRepoState = session
+    ? () => {
+        setIsRefreshingRepoState(true);
+        setRefreshToken((value) => value + 1);
+      }
+    : null;
+
   return {
     repoState: state,
     repoAttribution: attribution,
     repoOutcome: outcome,
+    retryRepoState,
+    isRefreshingRepoState,
   };
 }
