@@ -149,6 +149,51 @@ a {
   font-size: 0.8rem;
 }
 
+.top-bar-user {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.3rem 0.4rem 0.3rem 0.3rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(16, 33, 58, 0.08);
+}
+
+.top-bar-user-avatar {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 1px solid rgba(16, 33, 58, 0.12);
+}
+
+.top-bar-user-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.1;
+}
+
+.top-bar-user-name,
+.top-bar-user-login {
+  display: block;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-bar-user-name {
+  color: var(--ink-strong);
+  font-weight: 600;
+}
+
+.top-bar-user-login {
+  color: var(--ink-faint);
+  font-size: 0.72rem;
+}
+
 .top-bar-button {
   border: 1px solid rgba(16, 33, 58, 0.12);
   border-radius: 999px;

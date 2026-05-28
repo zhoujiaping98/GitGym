@@ -1,4 +1,5 @@
 import { SessionStatusBadge } from "./SessionStatusBadge";
+import type { CurrentUser } from "../types";
 
 type TopBarAction = {
   label: string;
@@ -11,14 +12,35 @@ type TopBarProps = {
   sessionLabel: string;
   tone?: "idle" | "active" | "pending" | "error";
   actions?: TopBarAction[];
+  currentUser?: CurrentUser | null;
 };
+
+function getCurrentUserLabels(currentUser: CurrentUser) {
+  const loginLabel = `@${currentUser.githubLogin}`;
+  const displayName = currentUser.displayName.trim();
+
+  if (displayName) {
+    return {
+      primary: displayName,
+      secondary: loginLabel,
+    };
+  }
+
+  return {
+    primary: loginLabel,
+    secondary: null,
+  };
+}
 
 export function TopBar({
   metaLabel,
   sessionLabel,
   tone = "idle",
   actions = [],
+  currentUser = null,
 }: TopBarProps) {
+  const currentUserLabels = currentUser ? getCurrentUserLabels(currentUser) : null;
+
   return (
     <header className="top-bar">
       <div className="brand-lockup">
@@ -32,6 +54,23 @@ export function TopBar({
       </div>
       <div className="top-bar-actions">
         <span className="top-bar-meta">{metaLabel}</span>
+        {currentUser && currentUserLabels ? (
+          <div className="top-bar-user">
+            {currentUser.avatarUrl ? (
+              <img
+                alt={`${currentUserLabels.primary} avatar`}
+                className="top-bar-user-avatar"
+                src={currentUser.avatarUrl}
+              />
+            ) : null}
+            <div className="top-bar-user-copy">
+              <span className="top-bar-user-name">{currentUserLabels.primary}</span>
+              {currentUserLabels.secondary ? (
+                <span className="top-bar-user-login">{currentUserLabels.secondary}</span>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         {actions.length > 0 ? (
           <div className="top-bar-controls">
             {actions.map((action) => (

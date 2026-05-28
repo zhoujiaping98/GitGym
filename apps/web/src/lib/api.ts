@@ -1,4 +1,5 @@
 import type {
+  CurrentUser,
   PracticeCatalog,
   PracticeScenario,
   PracticeSession,
@@ -16,6 +17,10 @@ type ApiResponse<T> = {
 
 type CurrentSessionPayload = {
   session: SessionResponse;
+};
+
+type CurrentUserPayload = {
+  user: UserResponse;
 };
 
 type CreateSessionInput = {
@@ -54,6 +59,15 @@ type SessionResponse = {
   ended_at?: string | null;
   expires_at: string;
   last_activity_at: string;
+};
+
+type UserResponse = {
+  id: number;
+  github_id: number;
+  github_login: string;
+  display_name?: string | null;
+  avatar_url?: string | null;
+  email?: string | null;
 };
 
 type RepoStateResponse = {
@@ -132,6 +146,17 @@ function toPracticeSession(session: SessionResponse): PracticeSession {
   };
 }
 
+function toCurrentUser(user: UserResponse): CurrentUser {
+  return {
+    id: user.id,
+    githubId: user.github_id,
+    githubLogin: user.github_login,
+    displayName: user.display_name ?? "",
+    avatarUrl: user.avatar_url ?? null,
+    email: user.email ?? null,
+  };
+}
+
 function toRepoStateSnapshot(payload: RepoStateResponse["data"]): RepoStateSnapshot {
   return {
     branch: payload.branch,
@@ -199,6 +224,35 @@ export async function fetchCurrentSession(
     session: toPracticeSession(payload.data.session),
     absenceReason: null,
   };
+}
+
+export async function fetchCurrentUser(signal?: AbortSignal): Promise<CurrentUser | null> {
+  const response = await fetch(`${API_BASE}/auth/me`, {
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+    signal,
+  });
+
+  if (response.status === 401) {
+    return null;
+  }
+
+  const payload = await readJson<CurrentUserPayload | { error?: string }>(response);
+  if (!response.ok) {
+    const message =
+      payload.data && "error" in payload.data && payload.data.error
+        ? payload.data.error
+        : "Request failed";
+    throw new ApiError(message, response.status);
+  }
+
+  if (!payload.data || !("user" in payload.data)) {
+    throw new ApiError("Current user response was malformed", response.status);
+  }
+
+  return toCurrentUser(payload.data.user);
 }
 
 export async function fetchPracticeCatalog(

@@ -3,6 +3,7 @@ import { LoginScreen } from "./components/LoginScreen";
 import { ScenarioPickerModal } from "./components/ScenarioPickerModal";
 import { TopBar } from "./components/TopBar";
 import { Workbench } from "./components/Workbench";
+import { useCurrentUser } from "./hooks/useCurrentUser";
 import { useCurrentSession } from "./hooks/useCurrentSession";
 import { useRepoState } from "./hooks/useRepoState";
 import { useTerminalSession } from "./hooks/useTerminalSession";
@@ -99,6 +100,7 @@ function isLifecycleRepoRefreshTrigger(trigger: RepoRefreshContext["trigger"]) {
 
 export default function App() {
   const currentSession = useCurrentSession();
+  const currentUser = useCurrentUser();
   // `undefined` follows the hook-provided current session; `null` intentionally suppresses it.
   const [sessionOverride, setSessionOverride] = useState<PracticeSession | null | undefined>(
     undefined,
@@ -126,6 +128,7 @@ export default function App() {
   const lastCompletedCommandKeyRef = useRef<string | null>(null);
   const previousCompletedCountRef = useRef(0);
   const effectiveSession = signedOutOverride ? null : currentSession.session;
+  const topBarCurrentUser = signedOutOverride ? null : currentUser.user;
   const hasSessionOverride = sessionOverride !== undefined;
   const displayedSession = hasSessionOverride ? sessionOverride : effectiveSession;
   const terminalSession = useTerminalSession(displayedSession);
@@ -687,6 +690,7 @@ export default function App() {
     <div className="app-shell">
       <TopBar
         actions={topBarActions}
+        currentUser={topBarCurrentUser}
         metaLabel={templateLabel(displayedSession?.templateId ?? null, catalog)}
         sessionLabel={sessionLabel}
         tone={sessionTone}

@@ -40,6 +40,22 @@ export type CurrentSessionState = {
   refresh: () => Promise<PracticeSession | null>;
 };
 
+export type CurrentUser = {
+  id: number;
+  githubId: number;
+  githubLogin: string;
+  displayName: string;
+  avatarUrl: string | null;
+  email: string | null;
+};
+
+export type CurrentUserState = {
+  status: "loading" | "ready" | "error";
+  user: CurrentUser | null;
+  error: string | null;
+  refresh: () => Promise<CurrentUser | null>;
+};
+
 export type CommandHistoryEntry = {
   id: string;
   command: string;

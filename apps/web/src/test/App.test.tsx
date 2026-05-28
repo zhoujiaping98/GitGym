@@ -3,9 +3,10 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import * as api from "../lib/api";
-import type { PracticeCatalog, TerminalSessionState } from "../types";
+import type { CurrentUserState, PracticeCatalog, TerminalSessionState } from "../types";
 
 const mockUseCurrentSession = vi.fn();
+const mockUseCurrentUser = vi.fn();
 const mockUseTerminalSession = vi.fn();
 const mockCreatePracticeSession = vi.spyOn(api, "createPracticeSession");
 const mockResetPracticeSession = vi.spyOn(api, "resetPracticeSession");
@@ -37,6 +38,10 @@ let nextAnimationFrameHandle = 1;
 
 vi.mock("../hooks/useCurrentSession", () => ({
   useCurrentSession: () => mockUseCurrentSession(),
+}));
+
+vi.mock("../hooks/useCurrentUser", () => ({
+  useCurrentUser: () => mockUseCurrentUser(),
 }));
 
 vi.mock("../hooks/useTerminalSession", () => ({
@@ -218,6 +223,18 @@ function createTerminalState(
   };
 }
 
+function createCurrentUserState(
+  overrides: Partial<CurrentUserState> = {},
+): CurrentUserState {
+  return {
+    status: "ready",
+    user: null,
+    error: null,
+    refresh: vi.fn(),
+    ...overrides,
+  };
+}
+
 function emitTerminalData(data: string) {
   currentTerminalDataHandler?.(data);
 }
@@ -259,6 +276,7 @@ async function confirmScenarioPicker() {
 
 beforeEach(() => {
   mockUseCurrentSession.mockReset();
+  mockUseCurrentUser.mockReset();
   mockUseTerminalSession.mockReset();
   mockFitAddonFit.mockReset();
   mockTerminalDispose.mockReset();
@@ -322,6 +340,7 @@ beforeEach(() => {
     error: null,
     refresh: vi.fn().mockResolvedValue(null),
   });
+  mockUseCurrentUser.mockReturnValue(createCurrentUserState());
 
   mockUseTerminalSession.mockReturnValue(createTerminalState());
 
@@ -358,6 +377,61 @@ describe("App", () => {
     expect(
       screen.queryByRole("button", { name: "New Session" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders the current user in the top bar when auth identity is available", () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+    mockUseCurrentUser.mockReturnValue(
+      createCurrentUserState({
+        user: {
+          id: 7,
+          githubId: 101,
+          githubLogin: "octocat",
+          displayName: "The Octocat",
+          avatarUrl: "https://avatars.example/octocat.png",
+          email: "octocat@example.com",
+        },
+      }),
+    );
+
+    render(<App />);
+
+    expect(screen.getByText("The Octocat")).toBeInTheDocument();
+    expect(screen.getByText("@octocat")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "The Octocat avatar" })).toBeInTheDocument();
+  });
+
+  it("falls back to the GitHub login when the current user has no display name", () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+    mockUseCurrentUser.mockReturnValue(
+      createCurrentUserState({
+        user: {
+          id: 7,
+          githubId: 101,
+          githubLogin: "octocat",
+          displayName: "",
+          avatarUrl: null,
+          email: "octocat@example.com",
+        },
+      }),
+    );
+
+    render(<App />);
+
+    expect(screen.getByText("@octocat")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 
   it("opens the shared scenario picker from the authenticated empty state", async () => {
@@ -3270,6 +3344,18 @@ describe("App", () => {
       error: null,
       refresh,
     });
+    mockUseCurrentUser.mockReturnValue(
+      createCurrentUserState({
+        user: {
+          id: 7,
+          githubId: 101,
+          githubLogin: "octocat",
+          displayName: "The Octocat",
+          avatarUrl: "https://avatars.example/octocat.png",
+          email: "octocat@example.com",
+        },
+      }),
+    );
 
     mockUseTerminalSession.mockReturnValue(
       createTerminalState({
@@ -3305,6 +3391,7 @@ describe("App", () => {
       expect(mockTerminalDispose).toHaveBeenCalledTimes(1);
     });
     expect(screen.getByText("Signed out")).toBeInTheDocument();
+    expect(screen.queryByText("The Octocat")).not.toBeInTheDocument();
     expect(screen.queryByText("runner-42")).not.toBeInTheDocument();
   });
 
