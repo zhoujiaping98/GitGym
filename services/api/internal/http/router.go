@@ -153,6 +153,13 @@ func NewRouter(deps ...Dependencies) http.Handler {
 		r.Get("/auth/github/callback", handlers.GitHubCallback(dependencies.GitHubOAuthClient, dependencies.AuthStore, dependencies.AuthConfig.FrontendRedirectURL))
 		r.Post("/auth/logout", handlers.Logout(dependencies.AuthStore))
 
+		if strings.TrimSpace(dependencies.AuthConfig.OperatorToken) != "" {
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireOperatorToken(dependencies.AuthConfig.OperatorToken))
+				r.Get("/operator/workspace-cleanup-jobs/exhausted", handlers.ListExhaustedWorkspaceCleanupJobs(dependencies.PracticeService))
+			})
+		}
+
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireSessionCookie(dependencies.AuthStore))
 			r.Get("/auth/me", handlers.AuthMe(dependencies.AuthStore))
@@ -236,6 +243,9 @@ func mergeConfig(base config.Config, override config.Config) config.Config {
 	}
 	if override.SessionSecret != "" {
 		base.SessionSecret = override.SessionSecret
+	}
+	if override.OperatorToken != "" {
+		base.OperatorToken = override.OperatorToken
 	}
 	if override.RunnerBaseURL != "" {
 		base.RunnerBaseURL = override.RunnerBaseURL

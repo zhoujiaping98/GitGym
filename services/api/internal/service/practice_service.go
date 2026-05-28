@@ -93,6 +93,7 @@ type PracticeService interface {
 	ExpireStalePracticeSessions(ctx context.Context) (int, error)
 	RunWorkspaceCleanupDueJobs(ctx context.Context, limit int) error
 	ReconcileWorkspaceCleanupJobs(ctx context.Context, limit int) (WorkspaceCleanupReconciliationSummary, error)
+	ListExhaustedWorkspaceCleanupJobs(ctx context.Context, limit int) ([]domain.WorkspaceCleanupJob, error)
 }
 
 type practiceService struct {
@@ -457,6 +458,22 @@ func (s *practiceService) ReconcileWorkspaceCleanupJobs(ctx context.Context, lim
 	summary.ExhaustedFailedJobs = len(exhaustedJobs)
 
 	return summary, nil
+}
+
+func (s *practiceService) ListExhaustedWorkspaceCleanupJobs(ctx context.Context, limit int) ([]domain.WorkspaceCleanupJob, error) {
+	if s.store == nil {
+		return []domain.WorkspaceCleanupJob{}, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	jobs, err := s.store.ListExhaustedWorkspaceCleanupJobs(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list exhausted cleanup jobs: %w", err)
+	}
+
+	return jobs, nil
 }
 
 func (s *practiceService) markWorkspaceCleanupJobSucceeded(

@@ -13,6 +13,7 @@ type Config struct {
 	GitHubClientID      string
 	GitHubSecret        string
 	SessionSecret       string
+	OperatorToken       string
 	RunnerBaseURL       string
 	APIBaseURL          string
 	FrontendRedirectURL string
@@ -34,6 +35,7 @@ func LoadRuntime() Config {
 		GitHubClientID:      os.Getenv("GITHUB_CLIENT_ID"),
 		GitHubSecret:        os.Getenv("GITHUB_CLIENT_SECRET"),
 		SessionSecret:       os.Getenv("SESSION_COOKIE_SECRET"),
+		OperatorToken:       os.Getenv("OPERATOR_API_TOKEN"),
 		RunnerBaseURL:       os.Getenv("RUNNER_BASE_URL"),
 		APIBaseURL:          apiBaseURL,
 		FrontendRedirectURL: frontendRedirectURL(os.Getenv("FRONTEND_REDIRECT_URL"), apiBaseURL),
