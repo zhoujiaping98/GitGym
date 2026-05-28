@@ -1281,6 +1281,146 @@ describe("App", () => {
     expect(within(sessionCard).getByText("Captured May 23, 12:00 PM")).toBeInTheDocument();
   });
 
+  it("renders a command outcome when the working tree becomes dirty", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const initialTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [],
+    });
+    const completedCommandTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [
+        {
+          id: "cmd-dirty",
+          command: "touch notes.txt",
+          phase: "stopped",
+          exitCode: 0,
+        },
+      ],
+    });
+
+    mockUseTerminalSession.mockReturnValue(initialTerminalState);
+
+    let repoStateRequestCount = 0;
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        return createJsonResponse(
+          repoStateRequestCount === 1
+            ? defaultRepoStatePayload
+            : {
+                data: {
+                  ...defaultRepoStatePayload.data,
+                  dirty: true,
+                  changed_files: ["?? notes.txt"],
+                  captured_at: "2026-05-23T04:01:00.000Z",
+                },
+              },
+        );
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    const { rerender } = render(<App />);
+    const sessionCard = await screen.findByLabelText("Operational session card");
+
+    mockUseTerminalSession.mockReturnValue(completedCommandTerminalState);
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(within(sessionCard).getByText("Working tree became dirty.")).toBeInTheDocument();
+    });
+  });
+
+  it("renders a changed-files count delta when dirty state does not flip", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const initialTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [],
+    });
+    const completedCommandTerminalState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [
+        {
+          id: "cmd-count",
+          command: "touch two.txt",
+          phase: "stopped",
+          exitCode: 0,
+        },
+      ],
+    });
+
+    mockUseTerminalSession.mockReturnValue(initialTerminalState);
+
+    let repoStateRequestCount = 0;
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        return createJsonResponse(
+          repoStateRequestCount === 1
+            ? {
+                data: {
+                  ...defaultRepoStatePayload.data,
+                  dirty: true,
+                  changed_files: ["M one.txt"],
+                },
+              }
+            : {
+                data: {
+                  ...defaultRepoStatePayload.data,
+                  dirty: true,
+                  changed_files: ["M one.txt", "M two.txt", "?? draft.md"],
+                  captured_at: "2026-05-23T04:02:00.000Z",
+                },
+              },
+        );
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    const { rerender } = render(<App />);
+    const sessionCard = await screen.findByLabelText("Operational session card");
+
+    mockUseTerminalSession.mockReturnValue(completedCommandTerminalState);
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(within(sessionCard).getByText("Changed files: 1 -> 3.")).toBeInTheDocument();
+    });
+  });
+
   it("refreshes repo state after reconnect when the same command id appears after history reset", async () => {
     mockUseCurrentSession.mockReturnValue({
       status: "ready",
@@ -1776,6 +1916,88 @@ describe("App", () => {
     );
     expect(screen.getByText("Snapshot loaded")).toBeInTheDocument();
     expect(screen.queryByText("Updated after git status")).not.toBeInTheDocument();
+  });
+
+  it("preserves the last successful command outcome when a later command refresh fails", async () => {
+    mockUseCurrentSession.mockReturnValue({
+      status: "ready",
+      session: activeSession,
+      absenceReason: null,
+      error: null,
+      refresh: vi.fn().mockResolvedValue(activeSession),
+    });
+
+    const cleanState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [],
+    });
+    const firstCommandState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [
+        { id: "cmd-1", command: "touch notes.txt", phase: "stopped", exitCode: 0 },
+      ],
+    });
+    const secondCommandState = createTerminalState({
+      status: "ready",
+      terminalUrl: "ws://localhost:3000/api/v1/practice-sessions/42/terminal",
+      history: [
+        { id: "cmd-1", command: "touch notes.txt", phase: "stopped", exitCode: 0 },
+        { id: "cmd-2", command: "git status", phase: "stopped", exitCode: 0 },
+      ],
+    });
+
+    mockUseTerminalSession.mockReturnValue(cleanState);
+
+    let repoStateRequestCount = 0;
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/api/v1/templates")) {
+        return createCatalogResponse();
+      }
+
+      if (url.endsWith("/api/v1/practice-sessions/42/repo-state")) {
+        repoStateRequestCount += 1;
+        if (repoStateRequestCount === 1) {
+          return createJsonResponse(defaultRepoStatePayload);
+        }
+        if (repoStateRequestCount === 2) {
+          return createJsonResponse({
+            data: {
+              ...defaultRepoStatePayload.data,
+              dirty: true,
+              changed_files: ["?? notes.txt"],
+              captured_at: "2026-05-23T04:01:00.000Z",
+            },
+          });
+        }
+        return createErrorResponse(502, "Unable to load repository state.");
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`);
+    });
+
+    const { rerender } = render(<App />);
+    const sessionCard = await screen.findByLabelText("Operational session card");
+
+    mockUseTerminalSession.mockReturnValue(firstCommandState);
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(within(sessionCard).getByText("Working tree became dirty.")).toBeInTheDocument();
+    });
+
+    mockUseTerminalSession.mockReturnValue(secondCommandState);
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(
+        within(sessionCard).getByText("Repository state may be out of date."),
+      ).toBeInTheDocument();
+    });
+    expect(within(sessionCard).getByText("Working tree became dirty.")).toBeInTheDocument();
   });
 
   it("keeps the workbench visible and marks the card recovering when the terminal degrades", async () => {

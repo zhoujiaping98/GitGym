@@ -19,6 +19,7 @@ type RepoPanelProps = {
   terminalStatus?: TerminalSessionState["status"];
   repoState?: RepoStateView;
   repoAttribution?: RepoAttribution | null;
+  repoOutcome?: string | null;
 };
 
 function formatDate(value: string) {
@@ -137,6 +138,7 @@ export function RepoPanel({
   terminalStatus = "idle",
   repoState = { status: "idle", snapshot: null, error: null },
   repoAttribution = null,
+  repoOutcome = null,
 }: RepoPanelProps) {
   if (preview || !session) {
     return (
@@ -225,6 +227,7 @@ export function RepoPanel({
               <span className="repo-state-inline-note">{attributionCopy}</span>
             ) : null}
             {freshnessCopy ? <span className="repo-state-inline-note">{freshnessCopy}</span> : null}
+            {repoOutcome ? <span className="repo-state-inline-note">{repoOutcome}</span> : null}
           </div>
           {repoState.status === "ready" || repoState.status === "stale" ? (
             <>

@@ -16,6 +16,7 @@ type WorkbenchProps = {
   templateName?: string | null;
   repoState?: RepoStateView;
   repoAttribution?: RepoAttribution | null;
+  repoOutcome?: string | null;
 };
 
 const previewTerminal: TerminalSessionState = {
@@ -37,6 +38,7 @@ export function Workbench({
   templateName = null,
   repoState = { status: "idle", snapshot: null, error: null },
   repoAttribution = null,
+  repoOutcome = null,
 }: WorkbenchProps) {
   const shellClassName = preview
     ? "workbench-shell workbench-shell-preview"
@@ -58,6 +60,7 @@ export function Workbench({
         terminalStatus={terminal.status}
         repoState={repoState}
         repoAttribution={repoAttribution}
+        repoOutcome={repoOutcome}
       />
       <CommandHistoryPanel preview={preview} terminal={terminal} />
     </section>

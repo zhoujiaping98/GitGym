@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPracticeRepoState } from "../lib/api";
+import { repoOutcomeCopy } from "../lib/repoOutcome";
 import type {
   CommandHistoryEntry,
   PracticeSession,
   RepoAttribution,
   RepoRefreshContext,
+  RepoStateSnapshot,
   RepoStateView,
 } from "../types";
 
@@ -23,6 +25,7 @@ type UseRepoStateOptions = {
 type UseRepoStateResult = {
   repoState: RepoStateView;
   repoAttribution: RepoAttribution | null;
+  repoOutcome: string | null;
 };
 
 function getRepoStateError(error: unknown) {
@@ -36,9 +39,11 @@ export function useRepoState({
 }: UseRepoStateOptions): UseRepoStateResult {
   const [state, setState] = useState<RepoStateView>(idleState);
   const [attribution, setAttribution] = useState<RepoAttribution | null>(null);
+  const [outcome, setOutcome] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const lastCompletedCommandKeyRef = useRef<string | null>(null);
   const lastSessionIdRef = useRef<number | null>(null);
+  const lastSuccessfulSnapshotRef = useRef<RepoStateSnapshot | null>(null);
   const previousCompletedCountRef = useRef(0);
   const completedCommands = useMemo(
     () => commandHistory.filter((entry) => entry.phase === "stopped"),
@@ -52,9 +57,11 @@ export function useRepoState({
   useEffect(() => {
     if (!session) {
       lastCompletedCommandKeyRef.current = null;
+      lastSuccessfulSnapshotRef.current = null;
       previousCompletedCountRef.current = 0;
       setState(idleState);
       setAttribution(null);
+      setOutcome(null);
       return;
     }
 
@@ -62,7 +69,9 @@ export function useRepoState({
     const isSameSession = lastSessionIdRef.current === session.id;
     lastSessionIdRef.current = session.id;
     if (!isSameSession) {
+      lastSuccessfulSnapshotRef.current = null;
       setAttribution(null);
+      setOutcome(null);
     }
     setState((current) =>
       isSameSession && current.snapshot
@@ -80,6 +89,8 @@ export function useRepoState({
 
     void fetchPracticeRepoState(session.id, controller.signal)
       .then((snapshot) => {
+        const previousSnapshot = lastSuccessfulSnapshotRef.current;
+        lastSuccessfulSnapshotRef.current = snapshot;
         setState({
           status: "ready",
           snapshot,
@@ -91,6 +102,12 @@ export function useRepoState({
           commandId: refreshContext.commandId,
           commandText: refreshContext.commandText,
         });
+        if (refreshContext.trigger === "command_complete" && previousSnapshot) {
+          setOutcome(repoOutcomeCopy(previousSnapshot, snapshot));
+          return;
+        }
+
+        setOutcome(null);
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) {
@@ -151,5 +168,6 @@ export function useRepoState({
   return {
     repoState: state,
     repoAttribution: attribution,
+    repoOutcome: outcome,
   };
 }
